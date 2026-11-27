@@ -114,15 +114,26 @@ function ComputerAROpponentAvatar() {
   return (
     <RealisticHumanAvatar
       seedKey={`computer-roommate-${aiGender}`}
-      displayName={aiGender === 'female' ? 'AI ROOMMATE (F)' : 'AI ROOMMATE (M)'}
+      displayName={aiGender === 'female' ? 'AI COMPANION (F)' : 'AI COMPANION (M)'}
       gender={aiGender}
       outfitColor={aiGender === 'female' ? '#be185d' : '#1d4ed8'}
       accentColor={aiGender === 'female' ? '#fbcfe8' : '#38bdf8'}
       getBodyAnchor={() => ({
         pos: myRoomRuntime.ai.pos,
         yaw: myRoomRuntime.ai.yaw,
+        sitBlend: myRoomRuntime.ai.sitBlend,
         walkSpeed: myRoomRuntime.ai.isWalking ? 1 : 0,
         walkPhase: myRoomRuntime.ai.walkPhase,
+        headPitch: myRoomRuntime.ai.headReactPitch,
+        headYaw: myRoomRuntime.ai.headReactYaw,
+        headRoll: myRoomRuntime.ai.headReactRoll,
+        torsoPitch: myRoomRuntime.ai.torsoReactPitch,
+        torsoRoll: myRoomRuntime.ai.torsoReactRoll,
+        hairPullWorld: myRoomRuntime.ai.hairPullTarget,
+        onWorldTargets: (headPos, hairPos) => {
+          myRoomRuntime.ai.headWorldPos = headPos
+          myRoomRuntime.ai.hairWorldPos = hairPos
+        },
       })}
       getLeftWrist={() => myRoomRuntime.ai.leftHand}
       getRightWrist={() => myRoomRuntime.ai.rightHand}
@@ -185,6 +196,33 @@ function InARCraftStudioPanel() {
   const statusHint = useMyRoomStore((s) => s.statusHint)
 
   const camera = useThree((s) => s.camera)
+  const panelPoseRef = useRef<{ pos: [number, number, number]; yaw: number }>({
+    pos: [-0.52, 1.18, -0.78],
+    yaw: 0.55,
+  })
+  const prevVisibleRef = useRef(false)
+
+  // Dynamically anchor menu comfortably in front-left of user whenever opened (works seated or standing anywhere in room!)
+  useEffect(() => {
+    if (vrMenuVisible && !prevVisibleRef.current) {
+      camera.getWorldPosition(_rayOrigin)
+      camera.getWorldDirection(_rayDir)
+      _rayDir.y = 0
+      if (_rayDir.lengthSq() < 1e-4) _rayDir.set(0, 0, -1)
+      _rayDir.normalize()
+      const rightX = -_rayDir.z
+      const rightZ = _rayDir.x
+      panelPoseRef.current = {
+        pos: [
+          _rayOrigin.x + _rayDir.x * 0.85 - rightX * 0.42,
+          Math.max(myRoomRuntime.floorY + 0.85, _rayOrigin.y - 0.14),
+          _rayOrigin.z + _rayDir.z * 0.85 - rightZ * 0.42,
+        ],
+        yaw: Math.atan2(-_rayDir.x, -_rayDir.z) + 0.42,
+      }
+    }
+    prevVisibleRef.current = vrMenuVisible
+  }, [vrMenuVisible, camera])
 
   if (!vrMenuVisible) return null
 
@@ -195,7 +233,8 @@ function InARCraftStudioPanel() {
       [_rayOrigin.x, _rayOrigin.y, _rayOrigin.z],
       [_rayDir.x, _rayDir.y, _rayDir.z],
       myRoomRuntime.surfaces,
-      1.35
+      myRoomRuntime.floorY,
+      1.15
     )
     const color =
       kind === 'clay'
@@ -221,7 +260,7 @@ function InARCraftStudioPanel() {
   }
 
   return (
-    <group position={[-0.65, 1.28, -0.35]} rotation={[0, 0.65, 0]}>
+    <group position={panelPoseRef.current.pos} rotation={[0, panelPoseRef.current.yaw, 0]}>
       <mesh>
         <boxGeometry args={[0.96, 0.72, 0.025]} />
         <meshStandardMaterial color="#0b1220" transparent opacity={0.9} roughness={0.5} />

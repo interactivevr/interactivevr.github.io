@@ -212,8 +212,16 @@ export interface RealisticHumanAvatarProps {
   getBodyAnchor: () => {
     pos: [number, number, number]
     yaw: number
+    sitBlend?: number
     walkSpeed: number
     walkPhase: number
+    headPitch?: number
+    headYaw?: number
+    headRoll?: number
+    torsoPitch?: number
+    torsoRoll?: number
+    hairPullWorld?: [number, number, number] | null
+    onWorldTargets?: (headPos: [number, number, number], hairPos: [number, number, number]) => void
   }
   getLeftWrist: () => [number, number, number]
   getRightWrist: () => [number, number, number]
@@ -293,8 +301,13 @@ export function RealisticHumanAvatar({
 
   const rootRef = useRef<THREE.Group>(null)
   const torsoGroupRef = useRef<THREE.Group>(null)
+  const headRigRef = useRef<THREE.Group>(null)
   const chestBreathingRef = useRef<THREE.Mesh>(null)
   const labelGroupRef = useRef<THREE.Group>(null)
+  const hairOffsetRef = useRef<[number, number, number]>([0, 0, 0])
+  const _headWorldVec = useMemo(() => new THREE.Vector3(), [])
+  const _hairWorldVec = useMemo(() => new THREE.Vector3(), [])
+  const _headInvQuat = useMemo(() => new THREE.Quaternion(), [])
 
   const leftHipRef = useRef<THREE.Group>(null)
   const leftKneeRef = useRef<THREE.Group>(null)
@@ -313,21 +326,66 @@ export function RealisticHumanAvatar({
 
   useFrame((state) => {
     const t = state.clock.elapsedTime
-    const { pos, yaw, walkSpeed, walkPhase } = getBodyAnchor()
-    const stride = Math.sin(walkPhase) * 0.58 * walkSpeed
-    const pelvisBob = Math.abs(Math.sin(walkPhase)) * 0.025 * walkSpeed
+    const {
+      pos,
+      yaw,
+      sitBlend = 0,
+      walkSpeed,
+      walkPhase,
+      headPitch = 0,
+      headYaw = 0,
+      headRoll = 0,
+      torsoPitch = 0,
+      torsoRoll = 0,
+      hairPullWorld = null,
+      onWorldTargets,
+    } = getBodyAnchor()
+
+    const activeWalk = walkSpeed * (1 - sitBlend * 0.85)
+    const stride = Math.sin(walkPhase) * 0.58 * activeWalk
+    // When sitting (sitBlend = 1), lower pelvis by ~0.39m so seated hips rest at ~0.47m and feet touch floor
+    const pelvisDrop = sitBlend * 0.39 + Math.abs(Math.sin(walkPhase)) * 0.025 * activeWalk
 
     if (rootRef.current) {
-      rootRef.current.position.set(pos[0], pos[1] - pelvisBob, pos[2])
+      rootRef.current.position.set(pos[0], pos[1] - pelvisDrop, pos[2])
       rootRef.current.rotation.set(0, yaw, 0)
     }
 
     if (torsoGroupRef.current) {
       torsoGroupRef.current.rotation.set(
-        -0.04 * walkSpeed,
-        Math.sin(walkPhase) * 0.06 * walkSpeed,
-        0
+        -0.04 * activeWalk + sitBlend * 0.05 + torsoPitch,
+        Math.sin(walkPhase) * 0.06 * activeWalk,
+        headRoll * 0.25 + torsoRoll
       )
+    }
+
+    if (headRigRef.current) {
+      headRigRef.current.rotation.set(headPitch, headYaw, headRoll)
+      headRigRef.current.getWorldPosition(_headWorldVec)
+      _hairWorldVec.set(0, isFemale ? 0.04 : 0.08, isFemale ? 0.14 : 0.04).applyMatrix4(headRigRef.current.matrixWorld)
+      onWorldTargets?.(
+        [_headWorldVec.x, _headWorldVec.y, _headWorldVec.z],
+        [_hairWorldVec.x, _hairWorldVec.y, _hairWorldVec.z]
+      )
+
+      if (hairPullWorld) {
+        headRigRef.current.getWorldQuaternion(_headInvQuat).invert()
+        _wrist
+          .set(
+            hairPullWorld[0] - _hairWorldVec.x,
+            hairPullWorld[1] - _hairWorldVec.y,
+            hairPullWorld[2] - _hairWorldVec.z
+          )
+          .applyQuaternion(_headInvQuat)
+          .clampLength(0, 0.13)
+        hairOffsetRef.current = [_wrist.x, _wrist.y, _wrist.z]
+      } else {
+        hairOffsetRef.current = [
+          hairOffsetRef.current[0] * 0.85,
+          hairOffsetRef.current[1] * 0.85,
+          hairOffsetRef.current[2] * 0.85,
+        ]
+      }
     }
 
     if (chestBreathingRef.current) {
@@ -339,13 +397,16 @@ export function RealisticHumanAvatar({
       labelGroupRef.current.lookAt(state.camera.position)
     }
 
+    // Leg articulation: blend seamlessly between walking stride and seated chair posture (+X lifts thighs forward, -X bends calves down)
+    const sitHipAngle = sitBlend * 1.44
+    const sitKneeAngle = -sitBlend * 1.48
     if (leftHipRef.current && leftKneeRef.current) {
-      leftHipRef.current.rotation.set(stride, 0, 0)
-      leftKneeRef.current.rotation.set(-Math.max(0, -stride * 1.15), 0, 0)
+      leftHipRef.current.rotation.set(stride + sitHipAngle, 0, sitBlend * 0.06)
+      leftKneeRef.current.rotation.set(-Math.max(0, -stride * 1.15) + sitKneeAngle, 0, 0)
     }
     if (rightHipRef.current && rightKneeRef.current) {
-      rightHipRef.current.rotation.set(-stride, 0, 0)
-      rightKneeRef.current.rotation.set(-Math.max(0, stride * 1.15), 0, 0)
+      rightHipRef.current.rotation.set(-stride + sitHipAngle, 0, -sitBlend * 0.06)
+      rightKneeRef.current.rotation.set(-Math.max(0, stride * 1.15) + sitKneeAngle, 0, 0)
     }
 
     const computeArm = (
@@ -358,7 +419,7 @@ export function RealisticHumanAvatar({
       const cosY = Math.cos(yaw)
       const sinY = Math.sin(yaw)
       const sx = sideSign * shoulderHalfW
-      _shoulder.set(pos[0] + sx * cosY, pos[1] + 1.36 - pelvisBob, pos[2] - sx * sinY)
+      _shoulder.set(pos[0] + sx * cosY, pos[1] + 1.36 - pelvisDrop, pos[2] - sx * sinY)
       _wrist.set(wristArr[0], wristArr[1], wristArr[2])
 
       _elbow.lerpVectors(_shoulder, _wrist, 0.48)
@@ -402,10 +463,16 @@ export function RealisticHumanAvatar({
             <meshStandardMaterial color="#27272a" roughness={0.45} metalness={0.2} />
           </mesh>
 
-          {/* Realistic Face & Styled Hair (for Computer Opponent; remote peers can pass hideHead if separate headRef is used) */}
+          {/* Realistic Face & Styled Hair */}
           {!hideHead && (
-            <group position={[0, 0.44, 0]}>
-              <HumanFaceHead profile={profile} gender={gender} showHair allowSunglasses={false} />
+            <group ref={headRigRef} position={[0, 0.44, 0]}>
+              <HumanFaceHead
+                profile={profile}
+                gender={gender}
+                showHair
+                allowSunglasses={false}
+                hairOffsetRef={hairOffsetRef}
+              />
             </group>
           )}
         </group>

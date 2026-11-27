@@ -1,6 +1,6 @@
 import { RoomSurfaceCollider } from './types'
 
-const GRAVITY = -6.8 // Slightly softer sculpting gravity so clay & paper feel controllable in MR
+const GRAVITY = -6.4
 
 export interface CraftPhysicsTarget {
   pos: [number, number, number]
@@ -10,20 +10,90 @@ export interface CraftPhysicsTarget {
 }
 
 /**
- * Steps craft object velocity + gravity and resolves resting placement / rebound against
- * scanned WebXR AR room surfaces (floor, tables, desks, couches, walls).
+ * Clamps any room position (avatar or object) strictly inside scanned wall boundaries
+ * and out of horizontal solid furniture blocks when walking.
+ */
+export function clampInsideRoomWalls(
+  x: number,
+  z: number,
+  margin: number,
+  surfaces: readonly RoomSurfaceCollider[],
+  fallbackBounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+): [number, number] {
+  let rx = Math.max(fallbackBounds.minX + margin, Math.min(fallbackBounds.maxX - margin, x))
+  let rz = Math.max(fallbackBounds.minZ + margin, Math.min(fallbackBounds.maxZ - margin, z))
+
+  // Resolve oriented vertical wall planes so objects/opponents never pass outside scanned room walls
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i]
+    if (s.orientation !== 'vertical') continue
+
+    const dx = rx - s.center[0]
+    const dz = rz - s.center[2]
+    // Signed distance along plane normal (Quest wall normals typically point into room, check projection within wall span)
+    const uProj = dx * s.uAxis[0] + dz * s.uAxis[2]
+    if (Math.abs(uProj) > s.halfU + margin * 0.5) continue
+
+    const signedDist = dx * s.normal[0] + dz * s.normal[2]
+    // If wall normal points inward toward (0,0) center or room origin: keep on the interior side (>= margin)
+    const originSide = -s.center[0] * s.normal[0] - s.center[2] * s.normal[2]
+    const inwardSign = originSide >= 0 ? 1 : -1
+    const depthInward = signedDist * inwardSign
+    if (depthInward < margin && depthInward > -0.65) {
+      const push = margin - depthInward
+      rx += s.normal[0] * inwardSign * push
+      rz += s.normal[2] * inwardSign * push
+    }
+  }
+
+  return [rx, rz]
+}
+
+/**
+ * Finds the highest scanned horizontal supporting surface under (x, z) at or below maxSearchY.
+ */
+export function findSupportingSurfaceY(
+  x: number,
+  z: number,
+  surfaces: readonly RoomSurfaceCollider[],
+  floorY: number,
+  maxSearchY = 2.0
+): { y: number; label: string } {
+  let bestY = floorY
+  let bestLabel = 'floor'
+
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i]
+    if (s.orientation !== 'horizontal') continue
+    if (s.label === 'ceiling') continue
+    if (Math.abs(x - s.center[0]) <= s.halfExtents[0] && Math.abs(z - s.center[2]) <= s.halfExtents[2]) {
+      const topY = s.maxY
+      if (topY <= maxSearchY && topY > bestY) {
+        bestY = topY
+        bestLabel = s.label
+      }
+    }
+  }
+
+  return { y: bestY, label: bestLabel }
+}
+
+/**
+ * Steps craft object velocity + gravity and resolves placement/rebound against ALL
+ * scanned WebXR AR room layers (floor, tables, desks, couches, walls).
  */
 export function stepCraftObjectPhysics(
   obj: CraftPhysicsTarget,
   surfaces: readonly RoomSurfaceCollider[],
+  floorY: number,
+  fallbackBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   dt: number
 ): boolean {
   const cDt = Math.min(dt, 0.04)
-  const r = Math.max(0.035, obj.approxRadius * 0.72)
+  const r = Math.max(0.038, obj.approxRadius * 0.72)
 
-  // Paper experiences high air drag and gentle flutter settle
-  const airDamp = obj.kind === 'paper' ? Math.max(0, 1 - 2.8 * cDt) : Math.max(0, 1 - 0.85 * cDt)
-  const gravScale = obj.kind === 'paper' ? 0.58 : 1.0
+  const airDamp = obj.kind === 'paper' ? Math.max(0, 1 - 2.6 * cDt) : Math.max(0, 1 - 0.85 * cDt)
+  const gravScale = obj.kind === 'paper' ? 0.55 : 1.0
 
   obj.vel[0] *= airDamp
   obj.vel[2] *= airDamp
@@ -36,18 +106,32 @@ export function stepCraftObjectPhysics(
   let touchedSurface = false
   const restitution = obj.kind === 'clay' ? 0.14 : 0.05
 
-  // Resolve scanned horizontal surfaces (tables, desks, floor, seats) & vertical walls
+  // 1. Resolve ALL scanned horizontal surfaces (tables, desks, couches, shelves, floor)
   for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i]
     if (s.orientation === 'horizontal') {
-      const dx = Math.abs(obj.pos[0] - s.center[0])
-      const dz = Math.abs(obj.pos[2] - s.center[2])
-      if (dx <= s.halfExtents[0] + r * 0.4 && dz <= s.halfExtents[2] + r * 0.4) {
-        const topY = s.center[1] + s.halfExtents[1]
-        // Only land on top side if falling onto or resting near surface top
-        if (obj.pos[1] - r <= topY && obj.pos[1] >= topY - 0.14 && obj.vel[1] <= 0.4) {
+      if (s.label === 'ceiling') {
+        const bottomY = s.minY
+        if (obj.pos[1] + r > bottomY && obj.pos[1] < bottomY + 0.25 && obj.vel[1] > 0) {
+          obj.pos[1] = bottomY - r
+          obj.vel[1] = -obj.vel[1] * 0.3
+        }
+        continue
+      }
+
+      const dx = obj.pos[0] - s.center[0]
+      const dz = obj.pos[2] - s.center[2]
+      const u = Math.abs(dx * s.uAxis[0] + dz * s.uAxis[2])
+      const v = Math.abs(dx * s.vAxis[0] + dz * s.vAxis[2])
+      const insideRotated = u <= s.halfU + r * 0.35 && v <= s.halfV + r * 0.35
+      const insideAABB =
+        Math.abs(dx) <= s.halfExtents[0] + r * 0.35 && Math.abs(dz) <= s.halfExtents[2] + r * 0.35
+
+      if (insideRotated || insideAABB) {
+        const topY = s.maxY
+        if (obj.pos[1] - r <= topY && obj.pos[1] >= topY - 0.16 && obj.vel[1] <= 0.45) {
           obj.pos[1] = topY + r
-          if (obj.vel[1] < -0.65) {
+          if (obj.vel[1] < -0.6) {
             obj.vel[1] = -obj.vel[1] * restitution
           } else {
             obj.vel[1] = 0
@@ -58,39 +142,49 @@ export function stepCraftObjectPhysics(
         }
       }
     } else {
-      // Vertical wall surface collision along wall normal
-      const nx = s.normal[0]
-      const nz = s.normal[2]
-      const relX = obj.pos[0] - s.center[0]
-      const relY = obj.pos[1] - s.center[1]
-      const relZ = obj.pos[2] - s.center[2]
+      // 2. Oriented Vertical Wall Plane / Furniture Side Collision
+      const dx = obj.pos[0] - s.center[0]
+      const dy = obj.pos[1] - s.center[1]
+      const dz = obj.pos[2] - s.center[2]
 
-      if (
-        Math.abs(relY) <= s.halfExtents[1] + r &&
-        Math.hypot(relX - nx * (relX * nx + relZ * nz), relZ - nz * (relX * nx + relZ * nz)) <=
-          Math.max(s.halfExtents[0], s.halfExtents[2]) + r
-      ) {
-        const dist = relX * nx + relZ * nz
-        if (Math.abs(dist) < r + 0.04) {
-          const sign = dist >= 0 ? 1 : -1
-          const push = r + 0.04 - Math.abs(dist)
-          obj.pos[0] += nx * sign * push
-          obj.pos[2] += nz * sign * push
-          const vn = obj.vel[0] * nx + obj.vel[2] * nz
-          if (vn * sign < 0) {
-            obj.vel[0] -= (1 + restitution) * vn * nx
-            obj.vel[2] -= (1 + restitution) * vn * nz
-          }
-          touchedSurface = true
+      if (obj.pos[1] + r < s.minY || obj.pos[1] - r > s.maxY) continue
+
+      const u = Math.abs(dx * s.uAxis[0] + dz * s.uAxis[2])
+      if (u > s.halfU + r) continue
+
+      const dist = dx * s.normal[0] + dy * s.normal[1] + dz * s.normal[2]
+      if (Math.abs(dist) < r + 0.04) {
+        const sign = dist >= 0 ? 1 : -1
+        const push = r + 0.04 - Math.abs(dist)
+        obj.pos[0] += s.normal[0] * sign * push
+        obj.pos[2] += s.normal[2] * sign * push
+        const vn = obj.vel[0] * s.normal[0] + obj.vel[2] * s.normal[2]
+        if (vn * sign < 0) {
+          obj.vel[0] -= (1 + restitution) * vn * s.normal[0]
+          obj.vel[2] -= (1 + restitution) * vn * s.normal[2]
         }
+        touchedSurface = true
       }
     }
   }
 
-  // Fallback AR Guardian floor at y = 0 so objects never drop below real room floor
-  if (obj.pos[1] - r < 0) {
-    obj.pos[1] = r
-    if (obj.vel[1] < -0.65) {
+  // 3. Enforce room inner wall perimeter so balls/clay/paper never escape outside your scanned walls
+  const clamped = clampInsideRoomWalls(obj.pos[0], obj.pos[2], r + 0.03, surfaces, fallbackBounds)
+  if (clamped[0] !== obj.pos[0]) {
+    obj.pos[0] = clamped[0]
+    obj.vel[0] *= -0.35
+    touchedSurface = true
+  }
+  if (clamped[1] !== obj.pos[2]) {
+    obj.pos[2] = clamped[1]
+    obj.vel[2] *= -0.35
+    touchedSurface = true
+  }
+
+  // 4. Calibrated AR real floor safeguard
+  if (obj.pos[1] - r < floorY) {
+    obj.pos[1] = floorY + r
+    if (obj.vel[1] < -0.6) {
       obj.vel[1] = -obj.vel[1] * restitution
     } else {
       obj.vel[1] = 0
@@ -100,31 +194,29 @@ export function stepCraftObjectPhysics(
     touchedSurface = true
   }
 
-  // Clamp outer fallback room bounds in case no walls were scanned yet
-  obj.pos[0] = Math.max(-5.5, Math.min(5.5, obj.pos[0]))
-  obj.pos[2] = Math.max(-5.5, Math.min(5.5, obj.pos[2]))
-
   return touchedSurface
 }
 
 /**
- * Raycasts against scanned room surfaces + y=0 floor fallback to find a clean placement point.
+ * Raycasts against scanned room horizontal surfaces + real floor to place spawned craft objects
+ * comfortably in front of the user rather than far away.
  */
 export function raycastRoomPlacementPoint(
   origin: [number, number, number],
   dir: [number, number, number],
   surfaces: readonly RoomSurfaceCollider[],
-  maxDist = 4.0
+  floorY = 0,
+  maxDist = 1.25
 ): [number, number, number] {
   let bestT = maxDist
   let hitPoint: [number, number, number] | null = null
 
   for (let i = 0; i < surfaces.length; i++) {
     const s = surfaces[i]
-    if (s.orientation === 'horizontal' && Math.abs(dir[1]) > 0.05) {
-      const topY = s.center[1] + s.halfExtents[1]
+    if (s.orientation === 'horizontal' && s.label !== 'ceiling' && Math.abs(dir[1]) > 0.05) {
+      const topY = s.maxY
       const t = (topY - origin[1]) / dir[1]
-      if (t > 0.15 && t < bestT) {
+      if (t > 0.25 && t < bestT) {
         const hx = origin[0] + dir[0] * t
         const hz = origin[2] + dir[2] * t
         if (
@@ -132,24 +224,25 @@ export function raycastRoomPlacementPoint(
           Math.abs(hz - s.center[2]) <= s.halfExtents[2]
         ) {
           bestT = t
-          hitPoint = [hx, topY + 0.07, hz]
+          hitPoint = [hx, topY + 0.09, hz]
         }
       }
     }
   }
 
-  if (!hitPoint && dir[1] < -0.05) {
-    const tFloor = -origin[1] / dir[1]
-    if (tFloor > 0.15 && tFloor < bestT) {
-      hitPoint = [origin[0] + dir[0] * tFloor, 0.08, origin[2] + dir[2] * tFloor]
+  if (!hitPoint && dir[1] < -0.08) {
+    const tFloor = (floorY - origin[1]) / dir[1]
+    if (tFloor > 0.3 && tFloor < bestT) {
+      hitPoint = [origin[0] + dir[0] * tFloor, floorY + 0.1, origin[2] + dir[2] * tFloor]
     }
   }
 
+  // Default comfortable hand-reach spot 0.55m right in front of user's chest/gaze
   return (
     hitPoint ?? [
-      origin[0] + dir[0] * 0.85,
-      Math.max(0.12, origin[1] + dir[1] * 0.85),
-      origin[2] + dir[2] * 0.85,
+      origin[0] + dir[0] * 0.58,
+      Math.max(floorY + 0.12, origin[1] + dir[1] * 0.45 - 0.16),
+      origin[2] + dir[2] * 0.58,
     ]
   )
 }

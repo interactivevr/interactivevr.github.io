@@ -92,14 +92,17 @@ export function HumanFaceHead({
   gender = 'male',
   showHair = true,
   allowSunglasses = true,
+  hairOffsetRef,
 }: {
   profile: AthleteLookProfile
   gender?: AvatarGender
   showHair?: boolean
   allowSunglasses?: boolean
+  hairOffsetRef?: React.MutableRefObject<[number, number, number]>
 }) {
   const leftLidRef = useRef<THREE.Mesh>(null)
   const rightLidRef = useRef<THREE.Mesh>(null)
+  const hairGroupRef = useRef<THREE.Group>(null)
   const blinkSeed = useMemo(() => Math.random() * 4.5, [])
 
   const skinTex = useMemo(() => createSkinCanvasTexture(profile, gender), [profile, gender])
@@ -115,6 +118,12 @@ export function HumanFaceHead({
     const scaleY = blinking ? 1.0 : 0.05
     if (leftLidRef.current) leftLidRef.current.scale.y = scaleY
     if (rightLidRef.current) rightLidRef.current.scale.y = scaleY
+
+    if (hairGroupRef.current && hairOffsetRef) {
+      const ho = hairOffsetRef.current
+      hairGroupRef.current.position.set(ho[0], 0.032 + ho[1], 0.006 + ho[2])
+      hairGroupRef.current.rotation.set(ho[2] * 2.2, 0, -ho[0] * 2.5)
+    }
   })
 
   return (
@@ -248,7 +257,7 @@ export function HumanFaceHead({
 
       {/* Sculpted 3D Hair for Male & Female Presets */}
       {showHair && (
-        <group position={[0, 0.032, 0.006]}>
+        <group ref={hairGroupRef} position={[0, 0.032, 0.006]}>
           <mesh scale={[isFemale ? 0.94 : 0.96, 0.96, 1.0]}>
             <sphereGeometry args={[0.128, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56]} />
             <meshStandardMaterial color={profile.hairColor} roughness={0.78} />

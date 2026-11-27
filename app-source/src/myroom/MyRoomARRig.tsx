@@ -1,7 +1,6 @@
 import { useFrame, useThree } from '@react-three/fiber'
 import {
   useXR,
-  useXRControllerLocomotion,
   useXRInputSourceEvent,
   useXRInputSourceState,
   XROrigin,
@@ -30,8 +29,13 @@ import {
   useMyRoomStore,
 } from './useMyRoomStore'
 
-const PALM_GRAB_RADIUS = 0.17
-const PALM_SQUEEZE_RADIUS = 0.14
+const PALM_GRAB_RADIUS = 0.19
+const PALM_SQUEEZE_RADIUS = 0.15
+
+type CompanionHoldState =
+  | { type: 'ai-hand'; aiSide: 'left' | 'right' }
+  | { type: 'hair' }
+  | null
 
 const _worldPos = new THREE.Vector3()
 const _worldQuat = new THREE.Quaternion()
@@ -63,9 +67,18 @@ export function MyRoomARRig() {
     left: null,
     right: null,
   })
+  const companionHoldRef = useRef<{ left: CompanionHoldState; right: CompanionHoldState }>({
+    left: null,
+    right: null,
+  })
   const dualRestSpanRef = useRef<number | null>(null)
   const prevBButtonRef = useRef(false)
   const lastDeformNetSyncRef = useRef(0)
+  const lastTouchHapticRef = useRef(0)
+  const prevPalmPosRef = useRef<{ left: [number, number, number]; right: [number, number, number] }>({
+    left: [0, 1.2, 0],
+    right: [0, 1.2, 0],
+  })
 
   useEffect(() => {
     voiceAudio.ensureListener(camera)
@@ -80,9 +93,6 @@ export function MyRoomARRig() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
-
-  // Optional controller locomotion (physical walking works naturally in AR passthrough!)
-  useXRControllerLocomotion(originRef, { speed: 1.8 }, { type: 'snap', degrees: 45 }, 'left')
 
   useXRInputSourceEvent(
     'all',
@@ -270,7 +280,7 @@ export function MyRoomARRig() {
           handRes.estimator.reset()
         }
       } else if (handRes.isGrabbing) {
-        // Find closest craft object within palm grab reach
+        // Check if grabbing a craft object first; if none in reach, check AI companion's hand or hair!
         let bestObj: RuntimeCraftObject | null = null
         let bestDist = Infinity
         myRoomRuntime.objects.forEach((candidate) => {
@@ -297,12 +307,122 @@ export function MyRoomARRig() {
           handRes.estimator.reset()
           pulseXRControllerHaptics(handRes.activeInput, 0.4, 30)
           myRoomRuntime.onCraftObjectSend?.(stripToNetState(picked))
+        } else if (
+          companionHoldRef.current[handRes.side] === null &&
+          useGameStore.getState().peers &&
+          (useMyRoomStore.getState().opponentMode === 'computer' ||
+            (useMyRoomStore.getState().opponentMode === 'auto' &&
+              Object.keys(useGameStore.getState().peers).length === 0))
+        ) {
+          const ai = myRoomRuntime.ai
+          const dHair = Math.hypot(
+            handRes.posArr[0] - ai.hairWorldPos[0],
+            handRes.posArr[1] - ai.hairWorldPos[1],
+            handRes.posArr[2] - ai.hairWorldPos[2]
+          )
+          const dLeftHand = Math.hypot(
+            handRes.posArr[0] - ai.leftHand[0],
+            handRes.posArr[1] - ai.leftHand[1],
+            handRes.posArr[2] - ai.leftHand[2]
+          )
+          const dRightHand = Math.hypot(
+            handRes.posArr[0] - ai.rightHand[0],
+            handRes.posArr[1] - ai.rightHand[1],
+            handRes.posArr[2] - ai.rightHand[2]
+          )
+          if (dHair < 0.18) {
+            companionHoldRef.current[handRes.side] = { type: 'hair' }
+            pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
+            useMyRoomStore.getState().setStatusHint('Holding companion hair')
+          } else if (dLeftHand < 0.19) {
+            companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'left' }
+            pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
+            useMyRoomStore.getState().setStatusHint('Holding companion hand')
+          } else if (dRightHand < 0.19) {
+            companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'right' }
+            pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
+            useMyRoomStore.getState().setStatusHint('Holding companion hand')
+          }
         }
       }
     }
 
     handleGrabLifecycle(leftRes)
     handleGrabLifecycle(rightRes)
+
+    // Update tactile Computer Companion interactions (hand-holding, hair-holding, head pet, shoulder touch)
+    const ai = myRoomRuntime.ai
+    ai.heldHandByUser = null
+    ai.hairPullTarget = null
+    ai.touchedShoulderSide = null
+
+    ;[leftRes, rightRes].forEach((hRes) => {
+      const hold = companionHoldRef.current[hRes.side]
+      if (hold) {
+        if (!hRes.isGrabbing) {
+          companionHoldRef.current[hRes.side] = null
+        } else if (hold.type === 'ai-hand') {
+          ai.heldHandByUser = hold.aiSide
+          if (hold.aiSide === 'left') ai.leftHand = [...hRes.posArr]
+          else ai.rightHand = [...hRes.posArr]
+        } else if (hold.type === 'hair') {
+          ai.hairPullTarget = [...hRes.posArr]
+          const pdx = hRes.posArr[0] - ai.hairWorldPos[0]
+          const pdy = hRes.posArr[1] - ai.hairWorldPos[1]
+          const cosY = Math.cos(ai.yaw)
+          const sinY = Math.sin(ai.yaw)
+          const localSide = pdx * cosY - (hRes.posArr[2] - ai.hairWorldPos[2]) * sinY
+          ai.headReactRoll = Math.max(-0.32, Math.min(0.32, -localSide * 1.4))
+          ai.headReactPitch = Math.max(-0.28, Math.min(0.28, -pdy * 1.2))
+        }
+      }
+
+      // Open palm / hand touch on Head or Full Body Torso Capsule interacts & pushes smoothly
+      const prevPalm = prevPalmPosRef.current[hRes.side]
+      const palmVelX = (hRes.posArr[0] - prevPalm[0]) / Math.max(0.008, cDt)
+      const palmVelZ = (hRes.posArr[2] - prevPalm[2]) / Math.max(0.008, cDt)
+      prevPalmPosRef.current[hRes.side] = [...hRes.posArr]
+
+      if (heldByHandRef.current[hRes.side] === null && !companionHoldRef.current[hRes.side]) {
+        const dHead = Math.hypot(
+          hRes.posArr[0] - ai.headWorldPos[0],
+          hRes.posArr[1] - ai.headWorldPos[1],
+          hRes.posArr[2] - ai.headWorldPos[2]
+        )
+        if (dHead < 0.24) {
+          const cosY = Math.cos(ai.yaw)
+          const sinY = Math.sin(ai.yaw)
+          const hx = hRes.posArr[0] - ai.headWorldPos[0]
+          const hy = hRes.posArr[1] - ai.headWorldPos[1]
+          const hz = hRes.posArr[2] - ai.headWorldPos[2]
+          const sideOff = hx * cosY - hz * sinY
+          ai.headReactRoll = Math.max(-0.28, Math.min(0.28, sideOff * 1.4))
+          ai.headReactPitch = Math.max(-0.24, Math.min(0.24, (0.1 - hy) * 1.1))
+        } else {
+          // Check full body torso column (pelvis -> chest -> shoulders) for hand push & touch sensing
+          const pelvisY = ai.pos[1] + 0.42 - ai.sitBlend * 0.22
+          const chestTopY = ai.pos[1] + 1.42 - ai.sitBlend * 0.39
+          const withinTorsoHeight = hRes.posArr[1] >= pelvisY && hRes.posArr[1] <= chestTopY
+          const dHoriz = Math.hypot(hRes.posArr[0] - ai.pos[0], hRes.posArr[2] - ai.pos[2])
+          if (withinTorsoHeight && dHoriz < 0.31) {
+            ai.touchedShoulderSide = hRes.side
+            const pLen = dHoriz > 1e-4 ? dHoriz : 1
+            const pushDirX = (ai.pos[0] - hRes.posArr[0]) / pLen
+            const pushDirZ = (ai.pos[2] - hRes.posArr[2]) / pLen
+            const pushSpeed = Math.max(0.6, (0.31 - dHoriz) * 12 + Math.max(0, palmVelX * pushDirX + palmVelZ * pushDirZ) * 0.65)
+            ai.velXZ[0] = Math.max(-2.6, Math.min(2.6, ai.velXZ[0] + pushDirX * pushSpeed * cDt * 6))
+            ai.velXZ[1] = Math.max(-2.6, Math.min(2.6, ai.velXZ[1] + pushDirZ * pushSpeed * cDt * 6))
+            ai.torsoReactPitch = Math.max(-0.26, ai.torsoReactPitch - 0.14)
+            ai.torsoReactRoll = Math.max(-0.22, Math.min(0.22, (hRes.side === 'left' ? -0.14 : 0.14)))
+            if (nowSec - lastTouchHapticRef.current > 0.28) {
+              lastTouchHapticRef.current = nowSec
+              pulseXRControllerHaptics(hRes.activeInput, 0.24, 18)
+              useMyRoomStore.getState().setStatusHint('Companion sensed your body/hand touch')
+            }
+          }
+        }
+      }
+    })
 
     const leftId = heldByHandRef.current.left
     const rightId = heldByHandRef.current.right
@@ -540,7 +660,8 @@ export function MyRoomARRig() {
 
   return (
     <>
-      <XROrigin ref={originRef} position={[0, 0, 0.8]} rotation={[0, 0, 0]}>
+      {/* Exact [0,0,0] origin keeps real Quest AR scanned room planes & walls aligned 1:1 with user hands */}
+      <XROrigin ref={originRef} position={[0, 0, 0]} rotation={[0, 0, 0]}>
         {!leftController?.object && leftHand && (
           <ArticulatedHand side="left" isGrabbingRef={grabStateRef} />
         )}

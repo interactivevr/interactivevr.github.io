@@ -46,7 +46,13 @@ export interface RoomSurfaceCollider {
   label: string
   orientation: 'horizontal' | 'vertical'
   center: [number, number, number]
-  halfExtents: [number, number, number] // x, y, z bounds
+  halfExtents: [number, number, number] // world AABB extents (x, y, z)
+  uAxis: [number, number, number] // plane tangent U in world space
+  vAxis: [number, number, number] // plane tangent V in world space
+  halfU: number
+  halfV: number
+  minY: number
+  maxY: number
   normal: [number, number, number]
 }
 

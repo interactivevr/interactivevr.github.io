@@ -24,29 +24,60 @@ export interface RuntimeCraftObject extends CraftObjectNetState {
 export interface MyRoomAIRuntime {
   pos: [number, number, number]
   yaw: number
+  sitBlend: number // 0 = standing, 1 = seated posture matching user
   isWalking: boolean
   walkPhase: number
   leftHand: [number, number, number]
   rightHand: [number, number, number]
+  headWorldPos: [number, number, number]
+  headReactPitch: number
+  headReactYaw: number
+  headReactRoll: number
+  torsoReactPitch: number
+  torsoReactRoll: number
+  velXZ: [number, number]
+  hairWorldPos: [number, number, number]
+  hairPullTarget: [number, number, number] | null
+  heldHandByUser: 'left' | 'right' | null
+  touchedShoulderSide: 'left' | 'right' | null
+  lookTarget: [number, number, number] | null
   holdingObjId: string | null
+  collectedIds: string[]
   actionTimerSec: number
-  actionMode: 'idle' | 'walk' | 'sculpt' | 'tear'
+  actionMode: 'idle' | 'walk' | 'collect' | 'sculpt' | 'tear' | 'offer'
+  targetObjId: string | null
 }
 
 export const myRoomRuntime = {
   objects: new Map<string, RuntimeCraftObject>(),
   surfaces: [] as RoomSurfaceCollider[],
-  roomOriginOffset: [0, 0, 0] as [number, number, number],
+  floorY: 0,
+  roomBoundsXZ: { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 },
   ai: {
-    pos: [0, 0, -1.65] as [number, number, number],
+    pos: [0, 0, -1.25] as [number, number, number],
     yaw: 0,
+    sitBlend: 0,
     isWalking: false,
     walkPhase: 0,
-    leftHand: [-0.24, 1.12, -1.42] as [number, number, number],
-    rightHand: [0.24, 1.12, -1.42] as [number, number, number],
+    leftHand: [-0.22, 1.12, -1.05] as [number, number, number],
+    rightHand: [0.22, 1.12, -1.05] as [number, number, number],
+    headWorldPos: [0, 1.56, -1.25] as [number, number, number],
+    headReactPitch: 0,
+    headReactYaw: 0,
+    headReactRoll: 0,
+    torsoReactPitch: 0,
+    torsoReactRoll: 0,
+    velXZ: [0, 0] as [number, number],
+    hairWorldPos: [0, 1.62, -1.22] as [number, number, number],
+    hairPullTarget: null,
+    heldHandByUser: null,
+    touchedShoulderSide: null,
+    lookTarget: null,
     holdingObjId: null,
-    actionTimerSec: 1.5,
+    collectedIds: [],
+    actionTimerSec: 1.4,
     actionMode: 'idle',
+    targetObjId: null,
   } as MyRoomAIRuntime,
   onCraftObjectSend: null as ((obj: CraftObjectNetState, targetPeer?: string) => void) | null,
   onCraftDeformSend: null as ((deform: CraftDeformNetPayload) => void) | null,
@@ -202,7 +233,7 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
   selectedColor: CLAY_COLORS[0],
   toolMode: 'sculpt-grab',
   opponentMode: 'auto',
-  showRoomMesh: true,
+  showRoomMesh: false,
   scannedSurfaceCount: 0,
   objectCount: 0,
   objectListVersion: 0,
@@ -229,12 +260,21 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
   resetRoomSession: () => {
     clearAllMyRoomObjects()
     myRoomRuntime.surfaces = []
+    myRoomRuntime.floorY = 0
+    myRoomRuntime.roomBoundsXZ = { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 }
     myRoomRuntime.ai.holdingObjId = null
+    myRoomRuntime.ai.collectedIds = []
+    myRoomRuntime.ai.targetObjId = null
+    myRoomRuntime.ai.hairPullTarget = null
+    myRoomRuntime.ai.heldHandByUser = null
+    myRoomRuntime.ai.velXZ = [0, 0]
+    myRoomRuntime.ai.torsoReactPitch = 0
+    myRoomRuntime.ai.torsoReactRoll = 0
     set((s) => ({
       objectCount: 0,
       objectListVersion: s.objectListVersion + 1,
       scannedSurfaceCount: 0,
-      statusHint: 'Room ready — create Clay or Paper objects to sculpt & share',
+      statusHint: 'Room ready — create Clay or Paper objects to sculpt & hand to companion',
     }))
   },
 }))

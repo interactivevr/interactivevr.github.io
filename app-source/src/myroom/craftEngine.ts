@@ -29,20 +29,26 @@ export function createCraftMeshData(
   let approxRadius = 0.1 * scale
 
   if (kind === 'paper') {
-    const w = (preset === 'card' ? 0.17 : 0.26) * scale
-    const h = (preset === 'card' ? 0.22 : 0.34) * scale
+    const w = (preset === 'card' ? 0.2 : 0.28) * scale
+    const h = (preset === 'card' ? 0.26 : 0.36) * scale
     baseGeo = new THREE.PlaneGeometry(w, h, 12, 15)
-    baseGeo.rotateX(-Math.PI * 0.42)
+    baseGeo.rotateX(-Math.PI * 0.32)
+    // Gentle paper bow so the sheet catches room light cleanly from eye height
+    const pAttr = baseGeo.getAttribute('position') as THREE.BufferAttribute
+    for (let i = 0; i < pAttr.count; i++) {
+      const px = pAttr.getX(i)
+      pAttr.setY(i, pAttr.getY(i) + Math.cos((px / w) * Math.PI) * 0.015 * scale)
+    }
     approxRadius = Math.max(w, h) * 0.55
   } else if (preset === 'cylinder') {
-    baseGeo = new THREE.CylinderGeometry(0.058 * scale, 0.058 * scale, 0.2 * scale, 18, 10)
-    approxRadius = 0.11 * scale
+    baseGeo = new THREE.CylinderGeometry(0.068 * scale, 0.068 * scale, 0.22 * scale, 18, 10)
+    approxRadius = 0.12 * scale
   } else if (preset === 'box') {
-    baseGeo = new THREE.BoxGeometry(0.14 * scale, 0.14 * scale, 0.14 * scale, 7, 7, 7)
-    approxRadius = 0.105 * scale
+    baseGeo = new THREE.BoxGeometry(0.155 * scale, 0.155 * scale, 0.155 * scale, 7, 7, 7)
+    approxRadius = 0.115 * scale
   } else {
-    baseGeo = new THREE.SphereGeometry(0.092 * scale, 18, 14)
-    approxRadius = 0.095 * scale
+    baseGeo = new THREE.SphereGeometry(0.106 * scale, 18, 14)
+    approxRadius = 0.11 * scale
   }
 
   // Slight organic surface irregularity for artificial clay at rest

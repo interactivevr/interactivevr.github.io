@@ -1,15 +1,171 @@
+import * as THREE from 'three'
+import { runtimeState } from '../store/useGameStore'
 import { computeTearSplitDeforms, encodeDeformOffsets, squeezeCraftWithPalm } from './craftEngine'
-import { CLAY_COLORS, CraftShapePreset, PAPER_COLORS } from './types'
+import { clampInsideRoomWalls, findSupportingSurfaceY } from './roomPhysics'
+import { CLAY_COLORS, CraftShapePreset, MAX_ROOM_CRAFT_OBJECTS, PAPER_COLORS, RoomSurfaceCollider } from './types'
 import {
   deleteRuntimeCraftObject,
+  MyRoomAIRuntime,
   myRoomRuntime,
   spawnRuntimeCraftObject,
   stripToNetState,
   useMyRoomStore,
 } from './useMyRoomStore'
 
-const AI_MOVE_SPEED = 1.25
+const AI_MOVE_SPEED = 1.15
+export const MIN_BODY_SEPARATION = 0.68
+const _headQuat = new THREE.Quaternion()
+const _userFwd = new THREE.Vector3()
 let _lastNetBroadcastSec = 0
+
+function normalizeAngleDelta(targetYaw: number, currentYaw: number): number {
+  let diff = targetYaw - currentYaw
+  while (diff > Math.PI) diff -= Math.PI * 2
+  while (diff < -Math.PI) diff += Math.PI * 2
+  return diff
+}
+
+/**
+ * Computes obstacle-free XZ position respecting scanned room walls and tall furniture (tables/desks/couches/beds).
+ */
+function steerClearOfFurniture(
+  x: number,
+  z: number,
+  surfaces: readonly RoomSurfaceCollider[],
+  floorY: number
+): [number, number] {
+  let rx = x
+  let rz = z
+  const avatarPad = 0.36
+
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i]
+    if (s.orientation !== 'horizontal' || s.label === 'floor' || s.label === 'ceiling') continue
+    // Walk around tables, desks, couches, beds, or chairs extending above ankle height
+    if (s.maxY < floorY + 0.16) continue
+
+    const halfX = s.halfExtents[0] + avatarPad
+    const halfZ = s.halfExtents[2] + avatarPad
+    const dx = rx - s.center[0]
+    const dz = rz - s.center[2]
+    if (Math.abs(dx) < halfX && Math.abs(dz) < halfZ) {
+      const overlapX = halfX - Math.abs(dx)
+      const overlapZ = halfZ - Math.abs(dz)
+      if (overlapX < overlapZ) {
+        rx += (dx >= 0 ? 1 : -1) * overlapX
+      } else {
+        rz += (dz >= 0 ? 1 : -1) * overlapZ
+      }
+    }
+  }
+  return [rx, rz]
+}
+
+/**
+ * Enforces solid physical separation between the player's body and the Computer AI opponent
+ * (applying momentum from hand/body pushes and sliding sideways around walls if cornered)
+ * so the player never passes through the opponent's body mesh.
+ */
+export function resolveAIBodyCollision(
+  ai: MyRoomAIRuntime,
+  userHead: [number, number, number],
+  userForwardXZ: [number, number],
+  surfaces: readonly RoomSurfaceCollider[],
+  floorY: number,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number },
+  dt: number
+): boolean {
+  const cDt = Math.min(dt, 0.05)
+
+  // 1. Apply momentum from hand/body nudges + smooth ground friction
+  let nextX = ai.pos[0] + ai.velXZ[0] * cDt
+  let nextZ = ai.pos[2] + ai.velXZ[1] * cDt
+  const damp = Math.exp(-7.5 * cDt)
+  ai.velXZ[0] *= damp
+  ai.velXZ[1] *= damp
+  ;[nextX, nextZ] = steerClearOfFurniture(nextX, nextZ, surfaces, floorY)
+  ;[nextX, nextZ] = clampInsideRoomWalls(nextX, nextZ, 0.42, surfaces, bounds)
+
+  // 2. Solid body-vs-body cylinder separation (cannot walk through AI body!)
+  const dx = nextX - userHead[0]
+  const dz = nextZ - userHead[2]
+  const dist = Math.hypot(dx, dz)
+
+  let bumped = false
+  if (dist < MIN_BODY_SEPARATION) {
+    bumped = true
+    const nx = dist > 1e-4 ? dx / dist : userForwardXZ[0]
+    const nz = dist > 1e-4 ? dz / dist : userForwardXZ[1]
+
+    const candDirect = clampInsideRoomWalls(
+      ...steerClearOfFurniture(
+        userHead[0] + nx * MIN_BODY_SEPARATION,
+        userHead[2] + nz * MIN_BODY_SEPARATION,
+        surfaces,
+        floorY
+      ),
+      0.42,
+      surfaces,
+      bounds
+    )
+
+    let chosenX = candDirect[0]
+    let chosenZ = candDirect[1]
+    let chosenDist = Math.hypot(chosenX - userHead[0], chosenZ - userHead[2])
+
+    // If backed against a scanned room wall or table, sidestep tangentially so user still cannot pass through!
+    if (chosenDist < MIN_BODY_SEPARATION - 0.05) {
+      const tx = -nz
+      const tz = nx
+      const candLeft = clampInsideRoomWalls(
+        ...steerClearOfFurniture(
+          userHead[0] + tx * MIN_BODY_SEPARATION,
+          userHead[2] + tz * MIN_BODY_SEPARATION,
+          surfaces,
+          floorY
+        ),
+        0.42,
+        surfaces,
+        bounds
+      )
+      const candRight = clampInsideRoomWalls(
+        ...steerClearOfFurniture(
+          userHead[0] - tx * MIN_BODY_SEPARATION,
+          userHead[2] - tz * MIN_BODY_SEPARATION,
+          surfaces,
+          floorY
+        ),
+        0.42,
+        surfaces,
+        bounds
+      )
+      const dLeft = Math.hypot(candLeft[0] - userHead[0], candLeft[1] - userHead[2])
+      const dRight = Math.hypot(candRight[0] - userHead[0], candRight[1] - userHead[2])
+      if (dLeft > chosenDist && dLeft >= dRight) {
+        chosenX = candLeft[0]
+        chosenZ = candLeft[1]
+        chosenDist = dLeft
+      } else if (dRight > chosenDist) {
+        chosenX = candRight[0]
+        chosenZ = candRight[1]
+        chosenDist = dRight
+      }
+    }
+
+    const moveDelta = Math.hypot(chosenX - ai.pos[0], chosenZ - ai.pos[2])
+    nextX = chosenX
+    nextZ = chosenZ
+    if (moveDelta > 0.002) {
+      ai.isWalking = true
+      ai.walkPhase += Math.min(0.45, moveDelta * 12)
+      ai.torsoReactPitch = Math.max(-0.22, ai.torsoReactPitch - Math.min(0.14, moveDelta * 2.5))
+    }
+  }
+
+  ai.pos[0] = nextX
+  ai.pos[2] = nextZ
+  return bumped
+}
 
 export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boolean): void {
   const st = useMyRoomStore.getState()
@@ -18,85 +174,198 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
 
   if (!aiActive) return
 
-  // Lowest peerId or solo client acts as AI authority
   const isAuthority = !hasHumanPeers || localPeerId === '' || localPeerId === 'local'
   if (!isAuthority) return
 
   const cDt = Math.min(dt, 0.05)
   const nowSec = performance.now() / 1000
   const ai = myRoomRuntime.ai
-  ai.actionTimerSec -= cDt
+  const surfaces = myRoomRuntime.surfaces
+  const floorY = myRoomRuntime.floorY
+  const bounds = myRoomRuntime.roomBoundsXZ
 
-  // Pick a horizontal surface height (e.g., scanned table/desk) near AI or y=0.85 virtual craft height
-  let dropSurfaceY = 0.78
-  for (let i = 0; i < myRoomRuntime.surfaces.length; i++) {
-    const s = myRoomRuntime.surfaces[i]
-    if (s.orientation === 'horizontal' && (s.label === 'table' || s.label === 'desk')) {
-      dropSurfaceY = s.center[1] + s.halfExtents[1] + 0.08
-      break
+  const userHead = runtimeState.localPose.headPos
+  const userQ = runtimeState.localPose.headQuat
+  _headQuat.set(userQ[0], userQ[1], userQ[2], userQ[3])
+  _userFwd.set(0, 0, -1).applyQuaternion(_headQuat)
+  _userFwd.y = 0
+  if (_userFwd.lengthSq() < 1e-4) _userFwd.set(0, 0, -1)
+  _userFwd.normalize()
+
+  // 1. Match user's posture: take SITTING position if user is seated (<1.32m above floor), else STANDING
+  const userEyeRelY = userHead[1] - floorY
+  const targetSit = userEyeRelY < 1.32 ? 1 : 0
+  ai.sitBlend += (targetSit - ai.sitBlend) * Math.min(1, cDt * 3.8)
+  ai.pos[1] = floorY
+
+  // 2. Check if user handed/offered or placed an uncollected object nearby to see & collect
+  if (!ai.holdingObjId && !ai.targetObjId) {
+    let bestGiftId: string | null = null
+    let bestGiftDist = Infinity
+    myRoomRuntime.objects.forEach((obj) => {
+      if (obj.creatorId === 'ai' || ai.collectedIds.includes(obj.id)) return
+      const dToAi = Math.hypot(obj.pos[0] - ai.pos[0], obj.pos[2] - ai.pos[2])
+      const dToHands = Math.hypot(
+        obj.pos[0] - (ai.leftHand[0] + ai.rightHand[0]) * 0.5,
+        obj.pos[1] - (ai.leftHand[1] + ai.rightHand[1]) * 0.5,
+        obj.pos[2] - (ai.leftHand[2] + ai.rightHand[2]) * 0.5
+      )
+      // User offered directly near AI's hands OR placed a gift in the room (< 2.2m)
+      if ((obj.isHeldByLocal && dToHands < 0.65) || (!obj.isHeldByLocal && obj.ownerId === null && dToAi < 2.4)) {
+        if (dToAi < bestGiftDist) {
+          bestGiftDist = dToAi
+          bestGiftId = obj.id
+        }
+      }
+    })
+    if (bestGiftId) {
+      ai.targetObjId = bestGiftId
+      ai.actionMode = 'collect'
+      ai.actionTimerSec = 2.6
     }
   }
 
-  // Smooth walking target toward center/table area
-  const targetStandX = Math.sin(nowSec * 0.28) * 0.85
-  const targetStandZ = -1.45 + Math.cos(nowSec * 0.21) * 0.35
-  const dx = targetStandX - ai.pos[0]
-  const dz = targetStandZ - ai.pos[2]
-  const dist = Math.hypot(dx, dz)
+  const userInteractingWithBody =
+    ai.heldHandByUser !== null || ai.hairPullTarget !== null || ai.touchedShoulderSide !== null
 
-  if (dist > 0.14 && ai.actionMode === 'walk') {
-    const step = Math.min(dist, AI_MOVE_SPEED * cDt)
-    ai.pos[0] += (dx / dist) * step
-    ai.pos[2] += (dz / dist) * step
-    ai.yaw = Math.atan2(-dx, -dz)
-    ai.isWalking = true
-    ai.walkPhase += cDt * 6.5
+  // 3. Determine navigation target cleanly inside walls and around furniture (tables/couches)
+  let goalX = userHead[0] + _userFwd.x * 1.28
+  let goalZ = userHead[2] + _userFwd.z * 1.28
+
+  const giftObj = ai.targetObjId ? myRoomRuntime.objects.get(ai.targetObjId) : null
+  if (giftObj && ai.actionMode === 'collect') {
+    ai.lookTarget = [...giftObj.pos]
+    const dirX = ai.pos[0] - giftObj.pos[0]
+    const dirZ = ai.pos[2] - giftObj.pos[2]
+    const dLen = Math.hypot(dirX, dirZ) || 1
+    // Stand/reach politely ~0.48m back from target object / table edge
+    goalX = giftObj.pos[0] + (dirX / dLen) * 0.48
+    goalZ = giftObj.pos[2] + (dirZ / dLen) * 0.48
   } else {
-    ai.isWalking = false
-    ai.yaw = Math.atan2(-ai.pos[0], 0.4 - ai.pos[2]) // Face toward player workspace
+    ai.lookTarget = [...userHead]
   }
 
-  // Position AI articulated hands cleanly in front of chest
+  ;[goalX, goalZ] = steerClearOfFurniture(goalX, goalZ, surfaces, floorY)
+  ;[goalX, goalZ] = clampInsideRoomWalls(goalX, goalZ, 0.44, surfaces, bounds)
+
+  const dx = goalX - ai.pos[0]
+  const dz = goalZ - ai.pos[2]
+  const distToGoal = Math.hypot(dx, dz)
+
+  // Always face the user cleanly unless holding/turning slightly for collection
+  const faceUserYaw = Math.atan2(-(userHead[0] - ai.pos[0]), -(userHead[2] - ai.pos[2]))
+  if (userInteractingWithBody || distToGoal < 0.24 || ai.sitBlend > 0.65) {
+    ai.isWalking = false
+    ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 6.5)
+  } else {
+    const moveStep = Math.min(distToGoal, AI_MOVE_SPEED * cDt)
+    let nextX = ai.pos[0] + (dx / distToGoal) * moveStep
+    let nextZ = ai.pos[2] + (dz / distToGoal) * moveStep
+    ;[nextX, nextZ] = steerClearOfFurniture(nextX, nextZ, surfaces, floorY)
+    ;[nextX, nextZ] = clampInsideRoomWalls(nextX, nextZ, 0.44, surfaces, bounds)
+    ai.pos[0] = nextX
+    ai.pos[2] = nextZ
+    ai.isWalking = true
+    ai.walkPhase += cDt * 6.2
+    ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 5.0)
+  }
+
+  // Smooth spring decay for head & torso tactile reactions
+  ai.headReactPitch *= Math.pow(0.08, cDt)
+  ai.headReactYaw *= Math.pow(0.08, cDt)
+  ai.headReactRoll *= Math.pow(0.08, cDt)
+  ai.torsoReactPitch *= Math.pow(0.06, cDt)
+  ai.torsoReactRoll *= Math.pow(0.06, cDt)
+
+  // Always resolve solid physical body collision & momentum BEFORE placing arms/objects
+  const bumpedByUser = resolveAIBodyCollision(
+    ai,
+    userHead,
+    [_userFwd.x, _userFwd.z],
+    surfaces,
+    floorY,
+    bounds,
+    cDt
+  )
+  if (bumpedByUser) {
+    useMyRoomStore.getState().setStatusHint('Companion stepped back from your body movement')
+  }
+
+  // 4. Arm & Hand Kinematics (facing user, seated vs standing height, welcoming offered object)
   const cosY = Math.cos(ai.yaw)
   const sinY = Math.sin(ai.yaw)
   const fwdX = -sinY
   const fwdZ = -cosY
   const rightX = cosY
   const rightZ = -sinY
-  const centerHoldX = ai.pos[0] + fwdX * 0.34
-  const centerHoldY = 1.15
-  const centerHoldZ = ai.pos[2] + fwdZ * 0.34
+  const shoulderHeight = floorY + 1.16 - ai.sitBlend * 0.36
+  const holdCenterX = ai.pos[0] + fwdX * 0.36
+  const holdCenterY = shoulderHeight - 0.04
+  const holdCenterZ = ai.pos[2] + fwdZ * 0.36
 
-  const squeezeWave = ai.actionMode === 'sculpt' ? Math.sin(nowSec * 6.0) * 0.06 : 0
-  const pullWave = ai.actionMode === 'tear' ? 0.24 : 0.12 - Math.abs(squeezeWave)
+  // Where objects collected beside her/him sit neatly (to AI's side on scanned table or floor)
+  const getSideCollectionSpot = (slotIdx: number): [number, number, number] => {
+    const sideSign = slotIdx % 2 === 0 ? 1 : -1
+    const tier = Math.floor(slotIdx / 2)
+    let cx = ai.pos[0] + rightX * sideSign * (0.48 + tier * 0.16) + fwdX * 0.18
+    let cz = ai.pos[2] + rightZ * sideSign * (0.48 + tier * 0.16) + fwdZ * 0.18
+    ;[cx, cz] = clampInsideRoomWalls(cx, cz, 0.22, surfaces, bounds)
+    const surf = findSupportingSurfaceY(cx, cz, surfaces, floorY, floorY + 1.35)
+    return [cx, surf.y + 0.09, cz]
+  }
 
-  ai.leftHand = [
-    centerHoldX - rightX * pullWave,
-    centerHoldY + squeezeWave * 0.3,
-    centerHoldZ - rightZ * pullWave,
-  ]
-  ai.rightHand = [
-    centerHoldX + rightX * pullWave,
-    centerHoldY - squeezeWave * 0.3,
-    centerHoldZ + rightZ * pullWave,
-  ]
+  // Welcoming open hand target if user holds an object close or AI reaches toward gift
+  const offeringGift = giftObj && giftObj.isHeldByLocal
+  if (ai.heldHandByUser !== 'left') {
+    if (offeringGift && giftObj) {
+      ai.leftHand = [
+        giftObj.pos[0] - rightX * 0.11,
+        giftObj.pos[1] - 0.04,
+        giftObj.pos[2] - rightZ * 0.11,
+      ]
+    } else {
+      const wave = ai.actionMode === 'sculpt' ? Math.sin(nowSec * 6.0) * 0.05 : 0
+      const spread = ai.actionMode === 'tear' ? 0.24 : ai.holdingObjId ? 0.11 - Math.abs(wave) : 0.21
+      ai.leftHand = [
+        holdCenterX - rightX * spread,
+        holdCenterY + wave * 0.4,
+        holdCenterZ - rightZ * spread,
+      ]
+    }
+  }
+  if (ai.heldHandByUser !== 'right') {
+    if (offeringGift && giftObj) {
+      ai.rightHand = [
+        giftObj.pos[0] + rightX * 0.11,
+        giftObj.pos[1] - 0.04,
+        giftObj.pos[2] + rightZ * 0.11,
+      ]
+    } else {
+      const wave = ai.actionMode === 'sculpt' ? Math.sin(nowSec * 6.0) * 0.05 : 0
+      const spread = ai.actionMode === 'tear' ? 0.24 : ai.holdingObjId ? 0.11 - Math.abs(wave) : 0.21
+      ai.rightHand = [
+        holdCenterX + rightX * spread,
+        holdCenterY - wave * 0.4,
+        holdCenterZ + rightZ * spread,
+      ]
+    }
+  }
 
-  // Manipulate held AI object
+  // 5. Handle Collected/Created Held Object in AI's Hands
   const heldObj = ai.holdingObjId ? myRoomRuntime.objects.get(ai.holdingObjId) : null
   if (heldObj) {
     heldObj.ownerId = 'ai'
-    heldObj.pos = [centerHoldX, centerHoldY, centerHoldZ]
+    heldObj.pos = [holdCenterX, holdCenterY, holdCenterZ]
     heldObj.vel = [0, 0, 0]
 
     if (ai.actionMode === 'sculpt') {
-      const palmNorm: [number, number, number] = [rightX, 0.1, rightZ]
       const res = squeezeCraftWithPalm(
         heldObj.meshData,
         heldObj.kind,
         heldObj.pos,
         heldObj.quat,
         ai.leftHand,
-        palmNorm,
+        [rightX, 0.1, rightZ],
         0.72,
         heldObj.deformSeed,
         heldObj.crumpleFactor,
@@ -127,36 +396,60 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     ai.holdingObjId = null
   }
 
-  // State transitions
-  if (ai.actionTimerSec <= 0) {
-    if (ai.actionMode === 'idle' || ai.actionMode === 'walk') {
-      // Spawn or pick up an AI object to sculpt
-      const usePaper = Math.random() < 0.45
-      const kind = usePaper ? 'paper' : 'clay'
-      const preset: CraftShapePreset = usePaper
-        ? 'sheet'
-        : Math.random() < 0.5
-          ? 'sphere'
-          : 'cylinder'
-      const color = usePaper
-        ? PAPER_COLORS[Math.floor(Math.random() * PAPER_COLORS.length)]
-        : CLAY_COLORS[Math.floor(Math.random() * CLAY_COLORS.length)]
-
-      const created = spawnRuntimeCraftObject({
-        ownerId: 'ai',
-        creatorId: 'ai',
-        kind,
-        preset,
-        color,
-        pos: [centerHoldX, centerHoldY, centerHoldZ],
-        broadcast: true,
-      })
-      ai.holdingObjId = created.id
+  // Pick up unheld offered gift once user releases it OR when AI walks close enough to reach it
+  if (ai.actionMode === 'collect' && giftObj && !giftObj.isHeldByLocal && giftObj.ownerId === null) {
+    const dReach = Math.hypot(giftObj.pos[0] - holdCenterX, giftObj.pos[2] - holdCenterZ)
+    if (dReach < 0.85) {
+      giftObj.ownerId = 'ai'
+      giftObj.epoch += 1
+      ai.holdingObjId = giftObj.id
+      ai.targetObjId = null
       ai.actionMode = 'sculpt'
-      ai.actionTimerSec = 2.4 + Math.random() * 1.4
+      ai.actionTimerSec = 1.6
+      useMyRoomStore.getState().setStatusHint('Companion received your object & is shaping/collecting it!')
+      myRoomRuntime.onCraftObjectSend?.(stripToNetState(giftObj))
+      return
+    }
+  } else if (ai.actionMode === 'collect' && (!giftObj || (giftObj.ownerId !== null && !giftObj.isHeldByLocal))) {
+    ai.targetObjId = null
+    ai.actionMode = 'idle'
+    ai.actionTimerSec = 1.2
+  }
+
+  // 6. State transitions (create own objects, squeeze, place neatly beside self)
+  ai.actionTimerSec -= cDt
+  if (ai.actionTimerSec <= 0 && !userInteractingWithBody) {
+    if (ai.actionMode === 'idle' || ai.actionMode === 'walk') {
+      if (myRoomRuntime.objects.size < MAX_ROOM_CRAFT_OBJECTS - 3) {
+        const usePaper = Math.random() < 0.45
+        const kind = usePaper ? 'paper' : 'clay'
+        const preset: CraftShapePreset = usePaper
+          ? 'sheet'
+          : Math.random() < 0.5
+            ? 'sphere'
+            : 'cylinder'
+        const color = usePaper
+          ? PAPER_COLORS[Math.floor(Math.random() * PAPER_COLORS.length)]
+          : CLAY_COLORS[Math.floor(Math.random() * CLAY_COLORS.length)]
+
+        const created = spawnRuntimeCraftObject({
+          ownerId: 'ai',
+          creatorId: 'ai',
+          kind,
+          preset,
+          color,
+          pos: [holdCenterX, holdCenterY, holdCenterZ],
+          broadcast: true,
+        })
+        ai.holdingObjId = created.id
+        ai.actionMode = 'sculpt'
+        ai.actionTimerSec = 2.2
+      } else {
+        ai.actionMode = 'idle'
+        ai.actionTimerSec = 2.5
+      }
     } else if (ai.actionMode === 'sculpt') {
-      if (heldObj && Math.random() < 0.42) {
-        // Tear piece apart dramatically!
+      if (heldObj && heldObj.creatorId === 'ai' && Math.random() < 0.35) {
         const split = computeTearSplitDeforms(
           heldObj.meshData,
           heldObj.kind,
@@ -168,65 +461,65 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
           heldObj.tearGeneration
         )
         if (split.canTear) {
-          const parentPos: [number, number, number] = [...heldObj.pos]
-          const parentColor = heldObj.color
-          const parentKind = heldObj.kind
-          const parentPreset = heldObj.preset
-          const nextGen = heldObj.tearGeneration + 1
+          const basePos: [number, number, number] = [...heldObj.pos]
+          const k = heldObj.kind
+          const pr = heldObj.preset
+          const col = heldObj.color
+          const ng = heldObj.tearGeneration + 1
+          const ns = heldObj.scale * split.childScale
           deleteRuntimeCraftObject(heldObj.id, true)
           ai.holdingObjId = null
 
-          spawnRuntimeCraftObject({
+          const spotL = getSideCollectionSpot(ai.collectedIds.length)
+          const spotR = getSideCollectionSpot(ai.collectedIds.length + 1)
+          const lPiece = spawnRuntimeCraftObject({
             ownerId: null,
             creatorId: 'ai',
-            kind: parentKind,
-            preset: parentPreset,
-            color: parentColor,
-            pos: [
-              parentPos[0] + split.leftOffsetWorld[0],
-              Math.max(dropSurfaceY, parentPos[1]),
-              parentPos[2] + split.leftOffsetWorld[2],
-            ],
-            vel: [-rightX * 0.45, 0.35, -rightZ * 0.45],
-            scale: heldObj.scale * split.childScale,
-            tearGeneration: nextGen,
+            kind: k,
+            preset: pr,
+            color: col,
+            pos: [basePos[0] + split.leftOffsetWorld[0], basePos[1], basePos[2] + split.leftOffsetWorld[2]],
+            vel: [(spotL[0] - basePos[0]) * 1.1, 0.3, (spotL[2] - basePos[2]) * 1.1],
+            scale: ns,
+            tearGeneration: ng,
             deformQ: split.leftDeformQ,
             broadcast: true,
           })
-          spawnRuntimeCraftObject({
+          const rPiece = spawnRuntimeCraftObject({
             ownerId: null,
             creatorId: 'ai',
-            kind: parentKind,
-            preset: parentPreset,
-            color: parentColor,
-            pos: [
-              parentPos[0] + split.rightOffsetWorld[0],
-              Math.max(dropSurfaceY, parentPos[1]),
-              parentPos[2] + split.rightOffsetWorld[2],
-            ],
-            vel: [rightX * 0.45, 0.35, rightZ * 0.45],
-            scale: heldObj.scale * split.childScale,
-            tearGeneration: nextGen,
+            kind: k,
+            preset: pr,
+            color: col,
+            pos: [basePos[0] + split.rightOffsetWorld[0], basePos[1], basePos[2] + split.rightOffsetWorld[2]],
+            vel: [(spotR[0] - basePos[0]) * 1.1, 0.3, (spotR[2] - basePos[2]) * 1.1],
+            scale: ns,
+            tearGeneration: ng,
             deformQ: split.rightDeformQ,
             broadcast: true,
           })
-          ai.actionMode = 'walk'
-          ai.actionTimerSec = 2.0
+          ai.collectedIds.push(lPiece.id, rPiece.id)
+          ai.actionMode = 'idle'
+          ai.actionTimerSec = 2.4
           return
         }
       }
 
-      // Drop sculpted creation gently toward player / room table
+      // Place finished / collected object neatly beside her/him on the room table or floor!
       if (heldObj) {
+        const spot = getSideCollectionSpot(ai.collectedIds.length)
         heldObj.ownerId = null
-        heldObj.vel = [fwdX * 0.75, 0.45, fwdZ * 0.75]
+        heldObj.vel = [(spot[0] - heldObj.pos[0]) * 1.4, 0.35, (spot[2] - heldObj.pos[2]) * 1.4]
         heldObj.epoch += 1
         heldObj.timestamp = Date.now()
+        if (!ai.collectedIds.includes(heldObj.id)) {
+          ai.collectedIds.push(heldObj.id)
+        }
         myRoomRuntime.onCraftObjectSend?.(stripToNetState(heldObj))
         ai.holdingObjId = null
       }
-      ai.actionMode = 'walk'
-      ai.actionTimerSec = 2.2 + Math.random() * 1.4
+      ai.actionMode = 'idle'
+      ai.actionTimerSec = 2.2
     }
   }
 }
