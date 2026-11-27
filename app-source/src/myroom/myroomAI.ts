@@ -14,6 +14,7 @@ import {
   RoomSurfaceCollider,
 } from './types'
 import {
+  getCombinedRoomSurfaces,
   MyRoomAIRuntime,
   myRoomRuntime,
   spawnRuntimeCraftObject,
@@ -190,7 +191,7 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   const cDt = Math.min(dt, 0.05)
   const nowSec = performance.now() / 1000
   const ai = myRoomRuntime.ai
-  const surfaces = myRoomRuntime.surfaces
+  const surfaces = getCombinedRoomSurfaces()
   const floorY = myRoomRuntime.floorY
   const bounds = myRoomRuntime.roomBoundsXZ
 
@@ -428,8 +429,14 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     return [cx, surf.y + 0.09, cz]
   }
 
-  // Welcoming open hand target if user holds an object close or AI reaches toward gift
+  // Welcoming open hand target if user holds/offers an item; relaxed natural side hang when idle
   const offeringGift = giftObj && giftObj.isHeldByLocal
+  const activeFrontTask = Boolean(offeringGift || ai.holdingObjId || ai.actionMode === 'sculpt')
+  const idleSway = Math.sin(nowSec * 1.9) * 0.012
+  const idleHandY = floorY + 0.875 - ai.sitBlend * 0.34 + idleSway
+  const idleSpread = 0.24
+  const idleFwd = ai.sitBlend * 0.14 + 0.07
+
   if (ai.heldHandByUser !== 'left') {
     if (offeringGift && giftObj) {
       ai.leftHand = [
@@ -437,13 +444,19 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
         giftObj.pos[1] - 0.04,
         giftObj.pos[2] - rightZ * 0.11,
       ]
-    } else {
+    } else if (activeFrontTask) {
       const wave = ai.actionMode === 'sculpt' ? Math.sin(nowSec * 6.0) * 0.05 : 0
       const spread = ai.holdingObjId ? 0.12 - Math.abs(wave) : 0.21
       ai.leftHand = [
         holdCenterX - rightX * spread,
         holdCenterY + wave * 0.4,
         holdCenterZ - rightZ * spread,
+      ]
+    } else {
+      ai.leftHand = [
+        ai.pos[0] - rightX * idleSpread + fwdX * idleFwd,
+        idleHandY,
+        ai.pos[2] - rightZ * idleSpread + fwdZ * idleFwd,
       ]
     }
   }
@@ -454,13 +467,19 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
         giftObj.pos[1] - 0.04,
         giftObj.pos[2] + rightZ * 0.11,
       ]
-    } else {
+    } else if (activeFrontTask) {
       const wave = ai.actionMode === 'sculpt' ? Math.sin(nowSec * 6.0) * 0.05 : 0
       const spread = ai.holdingObjId ? 0.12 - Math.abs(wave) : 0.21
       ai.rightHand = [
         holdCenterX + rightX * spread,
         holdCenterY - wave * 0.4,
         holdCenterZ + rightZ * spread,
+      ]
+    } else {
+      ai.rightHand = [
+        ai.pos[0] + rightX * idleSpread + fwdX * idleFwd,
+        idleHandY,
+        ai.pos[2] + rightZ * idleSpread + fwdZ * idleFwd,
       ]
     }
   }

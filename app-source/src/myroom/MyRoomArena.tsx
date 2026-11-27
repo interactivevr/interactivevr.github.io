@@ -17,6 +17,7 @@ import { stepMyRoomAI } from './myroomAI'
 import { raycastRoomPlacementPoint } from './roomPhysics'
 import { RealisticHumanAvatar } from './RealisticHumanAvatar'
 import { RoomScanner } from './RoomScanner'
+import { InARShowcasePanel, RoomDecorLayer } from './RoomShowcaseLayer'
 import {
   CraftMaterialKind,
   CraftShapePreset,
@@ -24,7 +25,13 @@ import {
   getDefaultColorForKind,
   MATERIAL_PHYSICS,
 } from './types'
-import { clearAllMyRoomObjects, myRoomRuntime, spawnRuntimeCraftObject, useMyRoomStore } from './useMyRoomStore'
+import {
+  clearAllMyRoomObjects,
+  getCombinedRoomSurfaces,
+  myRoomRuntime,
+  spawnRuntimeCraftObject,
+  useMyRoomStore,
+} from './useMyRoomStore'
 
 const _targetVec = new THREE.Vector3()
 const _targetQuat = new THREE.Quaternion()
@@ -125,8 +132,6 @@ function ComputerAROpponentAvatar() {
       seedKey={`computer-roommate-${aiGender}`}
       displayName={aiGender === 'female' ? 'AI COMPANION (F)' : 'AI COMPANION (M)'}
       gender={aiGender}
-      outfitColor={aiGender === 'female' ? '#be185d' : '#1d4ed8'}
-      accentColor={aiGender === 'female' ? '#fbcfe8' : '#38bdf8'}
       getBodyAnchor={() => ({
         pos: myRoomRuntime.ai.pos,
         yaw: myRoomRuntime.ai.yaw,
@@ -201,6 +206,8 @@ function InARCraftStudioPanel() {
   const showRoomMesh = useMyRoomStore((s) => s.showRoomMesh)
   const showSelfBody = useMyRoomStore((s) => s.showSelfBody)
   const showAiOpponent = useMyRoomStore((s) => s.showAiOpponent)
+  const showcaseOpen = useMyRoomStore((s) => s.showcaseOpen)
+  const decorCount = useMyRoomStore((s) => s.decorCount)
   const dartGame = useMyRoomStore((s) => s.dartGame)
   const opponentMode = useMyRoomStore((s) => s.opponentMode)
   const scannedCount = useMyRoomStore((s) => s.scannedSurfaceCount)
@@ -244,7 +251,7 @@ function InARCraftStudioPanel() {
     const placePos = raycastRoomPlacementPoint(
       [_rayOrigin.x, _rayOrigin.y, _rayOrigin.z],
       [_rayDir.x, _rayDir.y, _rayDir.z],
-      myRoomRuntime.surfaces,
+      getCombinedRoomSurfaces(),
       myRoomRuntime.floorY,
       1.15
     )
@@ -484,15 +491,24 @@ function InARCraftStudioPanel() {
         }}
       />
 
-      {/* Row 6: Self Body, Main Lobby & Exit AR */}
+      {/* Row 6: Showcase Panel (Room Redesign), Self Body, Main Lobby & Exit AR */}
       <ARStudioButton
-        position={[-0.31, -0.31, 0.016]}
+        position={[-0.36, -0.31, 0.016]}
+        width={0.22}
+        label={showcaseOpen ? 'SHOWCASE: ON' : `SHOWCASE (${decorCount})`}
+        color={showcaseOpen ? '#eab308' : '#b45309'}
+        onClick={() => useMyRoomStore.getState().setShowcaseOpen(!showcaseOpen)}
+      />
+      <ARStudioButton
+        position={[-0.12, -0.31, 0.016]}
+        width={0.22}
         label={showSelfBody ? 'MY BODY: ON' : 'MY BODY: OFF'}
         color={showSelfBody ? '#0ea5e9' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowSelfBody(!showSelfBody)}
       />
       <ARStudioButton
-        position={[0, -0.31, 0.016]}
+        position={[0.12, -0.31, 0.016]}
+        width={0.22}
         label="MAIN LOBBY"
         color="#7c3aed"
         onClick={() => {
@@ -502,7 +518,8 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.31, -0.31, 0.016]}
+        position={[0.36, -0.31, 0.016]}
+        width={0.22}
         label="EXIT AR"
         color="#b91c1c"
         onClick={() => {
@@ -534,12 +551,14 @@ export function MyRoomArena() {
       <directionalLight position={[-3.0, 4.0, -2.5]} intensity={0.55} color="#e0f2fe" />
 
       <RoomScanner />
+      <RoomDecorLayer />
       <CraftObjectsLayer />
       <DartArenaLayer />
       <MyRoomARRig />
       <LeftWristSmartWatch />
       <RightHandActiveToolView />
       <InARCraftStudioPanel />
+      <InARShowcasePanel />
 
       {peerList.map((peer) => (
         <RemoteARPeerAvatar key={peer.id} peer={peer} />

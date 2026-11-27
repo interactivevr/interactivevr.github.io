@@ -11,12 +11,16 @@ import {
   CraftObjectNetState,
   DartStateNetPayload,
   DartThrowNetPayload,
+  RoomDecorNetState,
 } from '../myroom/types'
 import {
   buildDartStateSyncPayload,
   deleteRuntimeCraftObject,
+  deleteRuntimeDecor,
   myRoomRuntime,
   spawnRuntimeCraftObject,
+  spawnRuntimeDecor,
+  stripDecorToNetState,
   stripToNetState,
   useMyRoomStore,
 } from '../myroom/useMyRoomStore'
@@ -190,6 +194,8 @@ class P2PGameClient {
   private sendMyRoomDelFn: ((data: { id: string }) => void) | null = null
   private sendMyRoomDartStateFn: ((data: DartStateNetPayload, target?: string) => void) | null = null
   private sendMyRoomDartThrowFn: ((data: DartThrowNetPayload) => void) | null = null
+  private sendMyRoomDecorFn: ((data: RoomDecorNetState, target?: string) => void) | null = null
+  private sendMyRoomDecorDelFn: ((data: { id: string }) => void) | null = null
   private poseInterval: number | null = null
   private localJoinedAt = Date.now()
 
@@ -238,6 +244,8 @@ class P2PGameClient {
     const mrDelAction = room.makeAction<{ id: string }>('mrDel')
     const mrDartStAction = room.makeAction<DartStateNetPayload>('mrDartSt')
     const mrDartThAction = room.makeAction<DartThrowNetPayload>('mrDartTh')
+    const mrDecorAction = room.makeAction<RoomDecorNetState>('mrDecor')
+    const mrDecorDelAction = room.makeAction<{ id: string }>('mrDecDl')
     const clkPingAction = room.makeAction<ClockPingPayload>('clkP')
     const clkPongAction = room.makeAction<ClockPongPayload>('clkA')
 
@@ -288,6 +296,14 @@ class P2PGameClient {
       if (Object.keys(useGameStore.getState().peers).length === 0) return
       void mrDartThAction.send(data).catch(() => {})
     }
+    this.sendMyRoomDecorFn = (data, target) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void mrDecorAction.send(data, target ? { target } : undefined).catch(() => {})
+    }
+    this.sendMyRoomDecorDelFn = (data) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void mrDecorDelAction.send(data).catch(() => {})
+    }
 
     myRoomRuntime.onCraftObjectSend = (obj, target) => {
       this.sendMyRoomObjFn?.(obj, target)
@@ -297,6 +313,12 @@ class P2PGameClient {
     }
     myRoomRuntime.onCraftRemoveSend = (id) => {
       this.sendMyRoomDelFn?.({ id })
+    }
+    myRoomRuntime.onDecorSend = (decor, target) => {
+      this.sendMyRoomDecorFn?.(decor, target)
+    }
+    myRoomRuntime.onDecorRemoveSend = (id) => {
+      this.sendMyRoomDecorDelFn?.({ id })
     }
     myRoomRuntime.onDartStateSend = (dartSt, target) => {
       this.sendMyRoomDartStateFn?.(dartSt, target)
@@ -547,6 +569,29 @@ class P2PGameClient {
         .applyNetworkDartThrow(incoming, useGameStore.getState().localPeerId, hasOpp)
     })
 
+    mrDecorAction.onMessage((incoming) => {
+      const existing = myRoomRuntime.decorItems.get(incoming.id)
+      if (!existing) {
+        const created = spawnRuntimeDecor({ ...incoming, broadcast: false })
+        created.isHeldByLocal = false
+      } else if (!existing.isHeldByLocal && incoming.epoch >= existing.epoch) {
+        existing.ownerId = incoming.ownerId
+        existing.variantIdx = incoming.variantIdx
+        existing.color = incoming.color
+        existing.pos = [...incoming.pos]
+        existing.yaw = incoming.yaw
+        existing.scale = incoming.scale
+        existing.powerOn = incoming.powerOn
+        existing.epoch = incoming.epoch
+        existing.timestamp = incoming.timestamp
+        useMyRoomStore.getState().bumpDecorVersion()
+      }
+    })
+
+    mrDecorDelAction.onMessage((data) => {
+      deleteRuntimeDecor(data.id, false)
+    })
+
     clkPingAction.onMessage((data, { peerId }) => {
       void clkPongAction.send({ t0: data.t0, t1: Date.now() }, { target: peerId }).catch(() => {})
     })
@@ -591,6 +636,7 @@ class P2PGameClient {
           this.sendCricketBallFn?.(cricketRuntime.ball, peerId)
         } else if (st.activeGame === 'myroom') {
           myRoomRuntime.objects.forEach((o) => this.sendMyRoomObjFn?.(stripToNetState(o), peerId))
+          myRoomRuntime.decorItems.forEach((d) => this.sendMyRoomDecorFn?.(stripDecorToNetState(d), peerId))
           const dg = useMyRoomStore.getState().dartGame
           if (dg.active) {
             this.sendMyRoomDartStateFn?.(buildDartStateSyncPayload(dg), peerId)
@@ -687,6 +733,8 @@ class P2PGameClient {
     myRoomRuntime.onCraftObjectSend = null
     myRoomRuntime.onCraftDeformSend = null
     myRoomRuntime.onCraftRemoveSend = null
+    myRoomRuntime.onDecorSend = null
+    myRoomRuntime.onDecorRemoveSend = null
     myRoomRuntime.onDartStateSend = null
     myRoomRuntime.onDartThrowSend = null
     this.sendHelloFn = null
@@ -701,6 +749,8 @@ class P2PGameClient {
     this.sendMyRoomDelFn = null
     this.sendMyRoomDartStateFn = null
     this.sendMyRoomDartThrowFn = null
+    this.sendMyRoomDecorFn = null
+    this.sendMyRoomDecorDelFn = null
 
     if (this.room) {
       try {

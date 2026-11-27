@@ -9,7 +9,12 @@ import {
   stepCraftObjectPhysics,
 } from './roomPhysics'
 import { CraftMaterialKind, InkStroke2D } from './types'
-import { myRoomRuntime, RuntimeCraftObject, useMyRoomStore } from './useMyRoomStore'
+import {
+  getCombinedRoomSurfaces,
+  myRoomRuntime,
+  RuntimeCraftObject,
+  useMyRoomStore,
+} from './useMyRoomStore'
 
 function paintPaperBase(ctx: CanvasRenderingContext2D): void {
   ctx.fillStyle = '#ffffff'
@@ -196,7 +201,7 @@ function SingleCraftObjectView({
       const surf = findSupportingSurfaceY(
         live.pos[0],
         live.pos[2],
-        myRoomRuntime.surfaces,
+        getCombinedRoomSurfaces(),
         myRoomRuntime.floorY,
         live.pos[1] + 0.05
       )
@@ -262,11 +267,12 @@ export function CraftObjectsLayer() {
     }
   }, [textures])
 
-  // Unified physics loop: gravity & room boundaries first, then 4-iteration solid stacking & non-penetration across ALL objects!
+  // Unified physics loop: gravity & room/furniture boundaries first, then 4-iteration solid stacking!
   useFrame((_, delta) => {
     const objs = Array.from(myRoomRuntime.objects.values())
     if (objs.length === 0) return
 
+    const surfaces = getCombinedRoomSurfaces()
     const targets: CraftPhysicsTarget[] = []
     for (let i = 0; i < objs.length; i++) {
       const o = objs[i]
@@ -287,7 +293,7 @@ export function CraftObjectsLayer() {
       if (!isFixed) {
         stepCraftObjectPhysics(
           t,
-          myRoomRuntime.surfaces,
+          surfaces,
           myRoomRuntime.floorY,
           myRoomRuntime.roomBoundsXZ,
           delta
@@ -296,7 +302,7 @@ export function CraftObjectsLayer() {
       targets.push(t)
     }
 
-    resolveCraftObjectCollisions(targets, myRoomRuntime.surfaces, myRoomRuntime.floorY, 4)
+    resolveCraftObjectCollisions(targets, surfaces, myRoomRuntime.floorY, 4)
   })
 
   const objectList = Array.from(myRoomRuntime.objects.values())

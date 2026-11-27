@@ -272,3 +272,116 @@ export interface DartThrowNetPayload {
   winnerLabel: string | null
   timestamp: number
 }
+
+export type RoomDecorKind =
+  | 'wallmate'
+  | 'lamp'
+  | 'tv'
+  | 'table'
+  | 'showcase'
+  | 'sofa'
+  | 'plant'
+  | 'clock'
+  | 'rug'
+
+export type DecorMountMode = 'wall' | 'floor' | 'tabletop'
+
+export interface RoomDecorCatalogItem {
+  kind: RoomDecorKind
+  label: string
+  mount: DecorMountMode
+  halfExtents: [number, number, number]
+  defaultColor: string
+  supportsItemsOnTop?: boolean
+}
+
+export const ROOM_DECOR_CATALOG: Record<RoomDecorKind, RoomDecorCatalogItem> = {
+  wallmate: {
+    kind: 'wallmate',
+    label: 'Wallmate (Nature)',
+    mount: 'wall',
+    halfExtents: [0.46, 0.32, 0.03],
+    defaultColor: '#78350f',
+  },
+  lamp: {
+    kind: 'lamp',
+    label: 'Table Lamp',
+    mount: 'tabletop',
+    halfExtents: [0.14, 0.22, 0.14],
+    defaultColor: '#fef3c7',
+  },
+  tv: {
+    kind: 'tv',
+    label: 'Smart TV',
+    mount: 'tabletop',
+    halfExtents: [0.48, 0.3, 0.06],
+    defaultColor: '#0f172a',
+  },
+  table: {
+    kind: 'table',
+    label: 'Table',
+    mount: 'floor',
+    halfExtents: [0.48, 0.37, 0.29],
+    defaultColor: '#92400e',
+    supportsItemsOnTop: true,
+  },
+  showcase: {
+    kind: 'showcase',
+    label: 'Showcase',
+    mount: 'floor',
+    halfExtents: [0.36, 0.72, 0.18],
+    defaultColor: '#5c3419',
+    supportsItemsOnTop: true,
+  },
+  sofa: {
+    kind: 'sofa',
+    label: 'Lounge Sofa',
+    mount: 'floor',
+    halfExtents: [0.68, 0.38, 0.34],
+    defaultColor: '#334155',
+    supportsItemsOnTop: true,
+  },
+  plant: {
+    kind: 'plant',
+    label: 'Potted Plant',
+    mount: 'tabletop',
+    halfExtents: [0.16, 0.26, 0.16],
+    defaultColor: '#15803d',
+  },
+  clock: {
+    kind: 'clock',
+    label: 'Wall Clock',
+    mount: 'wall',
+    halfExtents: [0.18, 0.18, 0.03],
+    defaultColor: '#cbd5e1',
+  },
+  rug: {
+    kind: 'rug',
+    label: 'Area Rug',
+    mount: 'floor',
+    halfExtents: [0.8, 0.01, 0.55],
+    defaultColor: '#7c2d12',
+  },
+}
+
+export const WALLMATE_SCENERY_NAMES = [
+  'Mountain Sunrise',
+  'Forest Waterfall',
+  'Ocean Sunset',
+  'Autumn Woods',
+] as const
+
+export interface RoomDecorNetState {
+  id: string
+  creatorId: string
+  ownerId: string | null
+  kind: RoomDecorKind
+  variantIdx: number
+  color: string
+  pos: [number, number, number]
+  yaw: number
+  scale: number
+  powerOn: boolean
+  epoch: number
+  timestamp: number
+}

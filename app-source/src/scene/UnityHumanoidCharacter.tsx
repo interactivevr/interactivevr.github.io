@@ -59,11 +59,11 @@ export interface UnityHumanoidCharacterProps {
 }
 
 const FINGERS_SPEC = [
-  { base: [0.025, -0.008, 0.006], prox: 0.026, dist: 0.02, r: 0.0074, thumb: true },
-  { base: [0.019, -0.042, 0.003], prox: 0.032, dist: 0.025, r: 0.0064 },
-  { base: [0.006, -0.045, 0.004], prox: 0.036, dist: 0.027, r: 0.0066 },
-  { base: [-0.007, -0.043, 0.003], prox: 0.033, dist: 0.025, r: 0.0062 },
-  { base: [-0.019, -0.038, 0.002], prox: 0.026, dist: 0.02, r: 0.0056 },
+  { base: [0.022, -0.007, 0.005], prox: 0.023, dist: 0.018, r: 0.0064, thumb: true },
+  { base: [0.016, -0.038, 0.002], prox: 0.029, dist: 0.022, r: 0.0055 },
+  { base: [0.005, -0.041, 0.003], prox: 0.032, dist: 0.024, r: 0.0056 },
+  { base: [-0.006, -0.039, 0.002], prox: 0.03, dist: 0.022, r: 0.0053 },
+  { base: [-0.016, -0.034, 0.002], prox: 0.024, dist: 0.018, r: 0.0048 },
 ] as const
 
 /**
@@ -104,14 +104,14 @@ export function UnityArticulatedHand({
   return (
     <group>
       {/* Anatomical Metacarpal Palm */}
-      <mesh position={[0, -0.026, 0.002]} scale={[1.08, 1.35, 0.44]}>
-        <sphereGeometry args={[0.027, 14, 12]} />
-        <meshStandardMaterial color={skinColor} roughness={0.5} />
+      <mesh position={[0, -0.024, 0.002]} scale={[1.02, 1.32, 0.4]}>
+        <sphereGeometry args={[0.024, 14, 12]} />
+        <meshStandardMaterial color={skinColor} roughness={0.44} />
       </mesh>
-      {/* Thenar thumb muscle cushion on inner palm (+Z/+X) */}
-      <mesh position={[mirror * 0.018, -0.018, 0.006]} scale={[0.75, 1.0, 0.65]}>
-        <sphereGeometry args={[0.016, 10, 8]} />
-        <meshStandardMaterial color={skinColor} roughness={0.52} />
+      {/* Thenar thumb cushion on inner palm */}
+      <mesh position={[mirror * 0.015, -0.016, 0.005]} scale={[0.72, 0.95, 0.6]}>
+        <sphereGeometry args={[0.014, 10, 8]} />
+        <meshStandardMaterial color={skinColor} roughness={0.46} />
       </mesh>
 
       {FINGERS_SPEC.map((f, idx) => (
@@ -124,7 +124,7 @@ export function UnityArticulatedHand({
         >
           <mesh position={[0, -f.prox * 0.5, 0]}>
             <capsuleGeometry args={[f.r, f.prox, 6, 10]} />
-            <meshStandardMaterial color={skinColor} roughness={0.5} />
+            <meshStandardMaterial color={skinColor} roughness={0.44} />
           </mesh>
           <group
             ref={(el) => {
@@ -134,7 +134,7 @@ export function UnityArticulatedHand({
           >
             <mesh position={[0, -f.dist * 0.5, 0]}>
               <capsuleGeometry args={[f.r * 0.84, f.dist, 6, 10]} />
-              <meshStandardMaterial color={skinColor} roughness={0.48} />
+              <meshStandardMaterial color={skinColor} roughness={0.44} />
             </mesh>
           </group>
         </group>
@@ -177,7 +177,7 @@ function alignBoneMinusYToWorldDir(
   parentBone.getWorldQuaternion(_parentWorldQ)
   _parentWorldQInv.copy(_parentWorldQ).invert()
 
-  _yAxis.copy(dirW).normalize().negate() // +Y = -dirW so child (0,-L,0) points +dirW
+  _yAxis.copy(dirW).normalize().negate()
   _zAxis.copy(refZ)
   _zAxis.addScaledVector(_yAxis, -_zAxis.dot(_yAxis))
   if (_zAxis.lengthSq() < 1e-4) _zAxis.set(0, 0, 1).addScaledVector(_yAxis, -_yAxis.z)
@@ -190,9 +190,9 @@ function alignBoneMinusYToWorldDir(
 }
 
 /**
- * Real Unity-3D-like Rigged Humanoid VR Character (`THREE.SkinnedMesh` + 19-bone `THREE.Skeleton` + VRIK):
- * continuous stitched anatomy & garments with smooth dual-bone weights across every joint,
- * PBR fabric/skin bump mapping, sculpted facial socket mesh, and exact analytical 2-bone Arm IK.
+ * Unity/VRoid-Grade Rigged Humanoid VR Character (`THREE.SkinnedMesh` + 19-bone `THREE.Skeleton` + VRIK):
+ * continuous stitched anatomy & layered school uniform / athletic gear, crisp 3D pleated skirt,
+ * knee-high socks, penny loafers, turned shirt collar & orange-red ribbon bow, and analytical 2-bone Arm IK.
  */
 export function UnityHumanoidCharacter({
   seedKey,
@@ -220,21 +220,22 @@ export function UnityHumanoidCharacter({
   rightHandAttachment,
 }: UnityHumanoidCharacterProps) {
   const isFemale = gender === 'female'
+  const isCasual = uniformStyle === 'casual'
   const profile = useMemo(
     () => lookProfile ?? getAthleteProfile(seedKey, gender),
     [lookProfile, seedKey, gender]
   )
 
-  const resolvedTop = outfitColor ?? (isFemale ? '#be185d' : '#1d4ed8')
-  const resolvedAccent = accentColor ?? (isFemale ? '#fbcfe8' : '#38bdf8')
-  const resolvedPants = pantsColor ?? (isFemale ? '#1e293b' : '#0f172a')
-  const resolvedShoes = shoeColor ?? '#f8fafc'
+  const resolvedTop = outfitColor ?? (isCasual ? '#1e2438' : isFemale ? '#be185d' : '#1d4ed8')
+  const resolvedAccent = accentColor ?? (isCasual ? '#d94816' : isFemale ? '#fbcfe8' : '#38bdf8')
+  const resolvedPants = pantsColor ?? (isCasual ? '#1b2133' : isFemale ? '#1e293b' : '#0f172a')
+  const resolvedShoes = shoeColor ?? (isCasual ? '#3f2518' : '#f8fafc')
 
   const rigSpec = useMemo(() => getUnityRigSpec(gender), [gender])
   const { rootBone, bones, skeleton } = useMemo(() => createUnitySkeleton(rigSpec), [rigSpec])
   const bodyGeo = useMemo(
-    () => buildUnityBodyGeometry(rigSpec, firstPersonMode),
-    [rigSpec, firstPersonMode]
+    () => buildUnityBodyGeometry(rigSpec, firstPersonMode, uniformStyle),
+    [rigSpec, firstPersonMode, uniformStyle]
   )
 
   const textures = useMemo(
@@ -253,42 +254,77 @@ export function UnityHumanoidCharacter({
 
   const materials = useMemo(
     () => [
-      // 0: Warm Skin
+      // 0: Smooth Fair Skin
       new THREE.MeshStandardMaterial({
         color: profile.skinColor,
-        roughness: 0.5,
-        metalness: 0.02,
+        roughness: isFemale ? 0.42 : 0.48,
+        metalness: 0.01,
+        emissive: isFemale ? profile.skinColor : '#000000',
+        emissiveIntensity: isFemale ? 0.06 : 0,
       }),
-      // 1: Upper Garment (Shirt/Jacket/Jersey with subtle fabric bump map)
+      // 1: Knit Sweater Vest / Upper Garment
       new THREE.MeshStandardMaterial({
         map: textures.clothAlbedo,
         bumpMap: textures.clothBump,
-        bumpScale: 0.004,
-        roughness: 0.68,
-        metalness: 0.04,
+        bumpScale: 0.003,
+        roughness: isCasual ? 0.76 : 0.68,
+        metalness: 0.03,
       }),
-      // 2: Tailored Trousers / Pants
+      // 2: Accordion Pleated Skirt / Tailored Trousers
       new THREE.MeshStandardMaterial({
         map: textures.pantsAlbedo,
         bumpMap: textures.clothBump,
-        bumpScale: 0.0035,
-        roughness: 0.78,
+        bumpScale: 0.0025,
+        roughness: 0.74,
         metalness: 0.03,
+        side: isCasual && isFemale ? THREE.DoubleSide : THREE.FrontSide,
       }),
-      // 3: Sneaker Upper
+      // 3: Dark Brown Leather Loafers / Sneakers
       new THREE.MeshStandardMaterial({
         color: resolvedShoes,
-        roughness: 0.42,
-        metalness: 0.08,
+        roughness: isCasual ? 0.34 : 0.42,
+        metalness: isCasual ? 0.14 : 0.08,
       }),
-      // 4: Belt / Collar / Trim / Sole accent
+      // 4: Outsole / Belt / Trim Accent
       new THREE.MeshStandardMaterial({
-        color: resolvedAccent,
-        roughness: 0.38,
-        metalness: 0.22,
+        color: isCasual ? '#1f1612' : resolvedAccent,
+        roughness: 0.55,
+        metalness: 0.1,
       }),
+      // 5: Crisp White Short-Sleeve Shirt (casual) or Uniform Top Match (sport/cricket)
+      isCasual
+        ? new THREE.MeshStandardMaterial({
+            color: '#f8fafc',
+            bumpMap: textures.clothBump,
+            bumpScale: 0.0018,
+            roughness: 0.62,
+            metalness: 0.02,
+          })
+        : new THREE.MeshStandardMaterial({
+            map: textures.clothAlbedo,
+            bumpMap: textures.clothBump,
+            bumpScale: 0.003,
+            roughness: 0.68,
+            metalness: 0.04,
+          }),
+      // 6: Dark Charcoal Knee-High Socks (casual female) or Uniform Lower Match
+      isCasual && isFemale
+        ? new THREE.MeshStandardMaterial({
+            color: '#37353d',
+            bumpMap: textures.clothBump,
+            bumpScale: 0.0025,
+            roughness: 0.78,
+            metalness: 0.02,
+          })
+        : new THREE.MeshStandardMaterial({
+            map: textures.pantsAlbedo,
+            bumpMap: textures.clothBump,
+            bumpScale: 0.003,
+            roughness: 0.78,
+            metalness: 0.03,
+          }),
     ],
-    [profile.skinColor, textures, resolvedShoes, resolvedAccent]
+    [profile.skinColor, textures, resolvedShoes, resolvedAccent, isFemale, isCasual]
   )
 
   const skinnedMesh = useMemo(() => {
@@ -312,26 +348,31 @@ export function UnityHumanoidCharacter({
   }, [bodyGeo, textures, materials])
 
   const charRootRef = useRef<THREE.Group>(null)
+  const chestMountRef = useRef<THREE.Group>(null)
   const headMountRef = useRef<THREE.Group>(null)
   const leftHandMountRef = useRef<THREE.Group>(null)
   const rightHandMountRef = useRef<THREE.Group>(null)
   const labelGroupRef = useRef<THREE.Group>(null)
   const hairOffsetRef = useRef<[number, number, number]>([0, 0, 0])
 
-  // Sync Head & Hand bone attachments cleanly via child-group parent transform inside Skeleton
+  // Sync Chest, Head & Hand bone attachments cleanly inside Skeleton
   useEffect(() => {
+    const chestBone = bones[UNITY_BONES.Chest]
     const headBone = bones[UNITY_BONES.Head]
     const lhBone = bones[UNITY_BONES.LeftHand]
     const rhBone = bones[UNITY_BONES.RightHand]
+    const cm = chestMountRef.current
     const hm = headMountRef.current
     const lhm = leftHandMountRef.current
     const rhm = rightHandMountRef.current
 
+    if (cm) chestBone.add(cm)
     if (hm) headBone.add(hm)
     if (lhm) lhBone.add(lhm)
     if (rhm) rhBone.add(rhm)
 
     return () => {
+      if (cm) chestBone.remove(cm)
       if (hm) headBone.remove(hm)
       if (lhm) lhBone.remove(lhm)
       if (rhm) rhBone.remove(rhm)
@@ -386,7 +427,7 @@ export function UnityHumanoidCharacter({
     bones[B.Neck].rotation.set(headPitch * 0.35, headYaw * 0.35, headRoll * 0.35)
     bones[B.Head].rotation.set(headPitch * 0.65, headYaw * 0.65, headRoll * 0.65)
 
-    // 2. Seated / Stance / Running Leg Bones (note: +X bends leg FORWARD toward -Z!)
+    // 2. Seated / Stance / Running Leg Bones
     const sitHip = sitBlend * 1.44 + squat * 0.68
     const sitKnee = -(sitBlend * 1.48 + squat * 1.05)
 
@@ -398,10 +439,9 @@ export function UnityHumanoidCharacter({
     bones[B.RightLowerLeg].rotation.set(-Math.max(0, stride * 1.1) + sitKnee, 0, -stanceSpread * 0.35)
     bones[B.RightFoot].rotation.set(-(-stride + sitHip + (-Math.max(0, stride * 1.1) + sitKnee)) * 0.45, 0, 0)
 
-    // Update upper-body matrices BEFORE arm IK
     bones[B.Hips].updateMatrixWorld(true)
 
-    // 3. Exact 2-Bone Analytical Unity VRIK Arm Solver in Bone Space
+    // 3. Exact 2-Bone Analytical Unity VRIK Arm Solver
     const cosY = Math.cos(yaw)
     const sinY = Math.sin(yaw)
 
@@ -439,7 +479,6 @@ export function UnityHumanoidCharacter({
       const sinAlpha = Math.sqrt(Math.max(0, 1 - cosAlpha * cosAlpha))
 
       _alongDir.copy(_armVec).normalize()
-      // Pole vector points elbows backward (+Z local) and gently outward
       _poleDir.set(sideSign * cosY * 0.45 + sinY * 0.85, -0.5, -sideSign * sinY * 0.45 + cosY * 0.85)
       _poleDir.addScaledVector(_alongDir, -_poleDir.dot(_alongDir))
       if (_poleDir.lengthSq() < 1e-4) _poleDir.set(0, -1, 0)
@@ -448,20 +487,16 @@ export function UnityHumanoidCharacter({
       _bendOffset.copy(_alongDir).multiplyScalar(cosAlpha * L1).addScaledVector(_poleDir, sinAlpha * L1)
       _elbowW.copy(_shoulderW).add(_bendOffset)
 
-      // Align UpperArm bone -Y axis cleanly from Shoulder -> Elbow
       const upperDir = _armVec.subVectors(_elbowW, _shoulderW).normalize()
       alignBoneMinusYToWorldDir(uaBone, shParent, upperDir, _poleDir)
       uaBone.updateMatrixWorld(true)
 
-      // Align LowerArm bone -Y axis cleanly from Elbow -> Wrist
       const lowerDir = _alongDir.subVectors(_wristW, _elbowW).normalize()
       alignBoneMinusYToWorldDir(laBone, uaBone, lowerDir, _poleDir)
       laBone.updateMatrixWorld(true)
 
-      // Hand orientation: direct XR wrist quat when provided, else naturally inward palm facing body!
       if (targetHandQuatArr) {
         laBone.getWorldQuaternion(_parentWorldQ).invert()
-        // XR grip/palm points -Z forward with palm -Y; +90deg X maps (-Y)->(-Z) and (+Z palm)->(-Y XR palm)!
         _handTargetQ
           .set(targetHandQuatArr[0], targetHandQuatArr[1], targetHandQuatArr[2], targetHandQuatArr[3])
           .multiply(_handFlipCorrect)
@@ -495,7 +530,7 @@ export function UnityHumanoidCharacter({
     if (!hideHead) {
       bones[B.Head].getWorldPosition(_headWorldV)
       _hairWorldV
-        .set(0, isFemale ? 0.04 : 0.08, isFemale ? 0.12 : 0.04)
+        .set(0, isFemale ? 0.04 : 0.08, isFemale ? 0.1 : 0.04)
         .applyMatrix4(bones[B.Head].matrixWorld)
       onWorldTargets?.(
         [_headWorldV.x, _headWorldV.y, _headWorldV.z],
@@ -528,11 +563,85 @@ export function UnityHumanoidCharacter({
     }
   })
 
+  // Chest local Y offset for turned shirt collar & orange-red ribbon bow
+  const chestLocalCollarY = rigSpec.shoulderY - (rigSpec.hipsY + 0.31) + 0.036
+
   return (
     <group ref={charRootRef}>
       <primitive object={skinnedMesh} />
 
-      {/* Bone-attached Continuous Sculpted Unity Face Head */}
+      {/* Bone-attached Casual Uniform Details: Crisp White Turned Shirt Collar + Orange-Red Ribbon Bow / Tie */}
+      <group ref={chestMountRef} visible={isCasual && !firstPersonMode}>
+        {isCasual && !firstPersonMode && (
+          <group position={[0, chestLocalCollarY, 0]}>
+            {/* White shirt collar band wrapping neck base */}
+            <mesh position={[0, 0.008, 0.005]} rotation={[0.14, 0, 0]}>
+              <cylinderGeometry
+                args={[isFemale ? 0.05 : 0.064, isFemale ? 0.068 : 0.084, 0.028, 18, 1, true]}
+              />
+              <meshStandardMaterial color="#f8fafc" roughness={0.55} side={THREE.DoubleSide} />
+            </mesh>
+            {/* Left & Right Folded Crisp White Shirt Collar Lapels */}
+            {[-1, 1].map((side) => (
+              <mesh
+                key={side}
+                position={[side * (isFemale ? 0.034 : 0.044), -0.014, isFemale ? -0.06 : -0.072]}
+                rotation={[0.48, side * -0.45, side * -0.48]}
+              >
+                <boxGeometry args={[isFemale ? 0.038 : 0.046, 0.04, 0.007]} />
+                <meshStandardMaterial color="#ffffff" roughness={0.5} />
+              </mesh>
+            ))}
+
+            {/* Bright Orange-Red Ribbon Bow (Female) or Necktie (Male) at Collar V */}
+            {isFemale ? (
+              <group position={[0, -0.044, -0.092]} rotation={[-0.28, 0, 0]}>
+                {/* Center Ribbon Knot */}
+                <mesh position={[0, 0.002, -0.004]} scale={[1.1, 1.0, 0.72]}>
+                  <boxGeometry args={[0.02, 0.02, 0.016]} />
+                  <meshStandardMaterial color="#dc4a19" roughness={0.44} />
+                </mesh>
+                {/* Left & Right Pleated Bow Loops */}
+                {[-1, 1].map((side) => (
+                  <mesh
+                    key={side}
+                    position={[side * 0.028, 0.004, 0.001]}
+                    rotation={[0.06, side * 0.14, side * 0.18]}
+                    scale={[1.0, 0.72, 0.42]}
+                  >
+                    <cylinderGeometry args={[0.026, 0.014, 0.046, 10]} />
+                    <meshStandardMaterial color="#ea580c" roughness={0.42} />
+                  </mesh>
+                ))}
+                {/* Twin Hanging Ribbon Tails */}
+                {[-1, 1].map((side) => (
+                  <mesh
+                    key={side}
+                    position={[side * 0.02, -0.038, -0.004]}
+                    rotation={[-0.08, 0, side * 0.28]}
+                  >
+                    <boxGeometry args={[0.021, 0.056, 0.005]} />
+                    <meshStandardMaterial color="#c2410c" roughness={0.46} />
+                  </mesh>
+                ))}
+              </group>
+            ) : (
+              <group position={[0, -0.045, -0.098]} rotation={[-0.14, 0, 0]}>
+                <mesh position={[0, 0.015, -0.004]}>
+                  <boxGeometry args={[0.022, 0.022, 0.016]} />
+                  <meshStandardMaterial color="#dc4a19" roughness={0.45} />
+                </mesh>
+                <mesh position={[0, -0.075, -0.006]} rotation={[0.05, 0, 0]}>
+                  <boxGeometry args={[0.028, 0.155, 0.008]} />
+                  <meshStandardMaterial color="#dc4a19" roughness={0.46} />
+                </mesh>
+              </group>
+            )}
+          </group>
+        )}
+      </group>
+
+      {/* Bone-attached Continuous Sculpted Unity/VRoid Face Head */}
       <group ref={headMountRef} visible={!hideHead}>
         {!hideHead && (
           <HumanFaceHead
@@ -560,7 +669,7 @@ export function UnityHumanoidCharacter({
 
       {/* Floating Nametag */}
       {!firstPersonMode && displayName && (
-        <group ref={labelGroupRef} position={[0, 1.88, 0]}>
+        <group ref={labelGroupRef} position={[0, 1.84, 0]}>
           <TextLabel fontSize={0.088} color={speakingLevel > 0.1 ? '#34d399' : '#f8fafc'}>
             {displayName}
           </TextLabel>

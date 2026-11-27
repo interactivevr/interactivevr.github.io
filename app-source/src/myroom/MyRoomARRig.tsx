@@ -26,13 +26,17 @@ import {
   squeezeCraftWithPalm,
 } from './craftEngine'
 import { computeRightToolWorldTransform } from './LeftWristSmartWatch'
-import { computeWorldObjectBox } from './roomPhysics'
-import { DARTS_PER_PLAYER, MATERIAL_PHYSICS } from './types'
+import { clampInsideRoomWalls, computeWorldObjectBox, findSupportingSurfaceY } from './roomPhysics'
+import { snapDecorNearWallIfClose } from './RoomShowcaseLayer'
+import { DARTS_PER_PLAYER, MATERIAL_PHYSICS, ROOM_DECOR_CATALOG } from './types'
 import {
   deleteRuntimeCraftObject,
+  getCombinedRoomSurfaces,
   myRoomRuntime,
   RuntimeCraftObject,
+  RuntimeRoomDecor,
   spawnRuntimeCraftObject,
+  stripDecorToNetState,
   stripToNetState,
   useMyRoomStore,
 } from './useMyRoomStore'
@@ -79,6 +83,10 @@ export function MyRoomARRig() {
   const grabStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const handSelectRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const heldByHandRef = useRef<{ left: string | null; right: string | null }>({
+    left: null,
+    right: null,
+  })
+  const heldDecorByHandRef = useRef<{ left: string | null; right: string | null }>({
     left: null,
     right: null,
   })
@@ -380,6 +388,52 @@ export function MyRoomARRig() {
         return
       }
 
+      const heldDecorId = heldDecorByHandRef.current[handRes.side]
+      if (heldDecorId !== null) {
+        const decor = myRoomRuntime.decorItems.get(heldDecorId)
+        if (!decor) {
+          heldDecorByHandRef.current[handRes.side] = null
+          return
+        }
+        if (handRes.isGrabbing) {
+          decor.pos = [...handRes.posArr]
+        } else {
+          heldDecorByHandRef.current[handRes.side] = null
+          decor.isHeldByLocal = false
+          decor.ownerId = null
+          const combined = getCombinedRoomSurfaces()
+          const spec = ROOM_DECOR_CATALOG[decor.kind]
+          const snappedWall = snapDecorNearWallIfClose(decor, combined, 0.36)
+          if (!snappedWall) {
+            if (spec.mount === 'floor') {
+              const [cx, cz] = clampInsideRoomWalls(
+                decor.pos[0],
+                decor.pos[2],
+                Math.min(spec.halfExtents[0], spec.halfExtents[2]) * decor.scale,
+                combined,
+                myRoomRuntime.roomBoundsXZ
+              )
+              decor.pos = [cx, myRoomRuntime.floorY + spec.halfExtents[1] * decor.scale, cz]
+            } else if (spec.mount === 'tabletop') {
+              const sup = findSupportingSurfaceY(
+                decor.pos[0],
+                decor.pos[2],
+                combined,
+                myRoomRuntime.floorY,
+                decor.pos[1] + 0.12
+              )
+              decor.pos[1] = sup.y + spec.halfExtents[1] * decor.scale
+            }
+          }
+          decor.epoch += 1
+          decor.timestamp = Date.now()
+          useMyRoomStore.getState().setSelectedDecorId(decor.id)
+          useMyRoomStore.getState().bumpDecorVersion()
+          myRoomRuntime.onDecorSend?.(stripDecorToNetState(decor))
+        }
+        return
+      }
+
       const heldId = heldByHandRef.current[handRes.side]
       if (heldId !== null) {
         const obj = myRoomRuntime.objects.get(heldId)
@@ -449,14 +503,42 @@ export function MyRoomARRig() {
           handRes.estimator.reset()
           pulseXRControllerHaptics(handRes.activeInput, 0.4, 30)
           myRoomRuntime.onCraftObjectSend?.(stripToNetState(picked))
-        } else if (
-          myRoomSt.showAiOpponent &&
-          companionHoldRef.current[handRes.side] === null &&
-          useGameStore.getState().peers &&
-          (myRoomSt.opponentMode === 'computer' ||
-            (myRoomSt.opponentMode === 'auto' &&
-              Object.keys(useGameStore.getState().peers).length === 0))
-        ) {
+        } else {
+          // Check nearby Room Redesign Decor items (Wallmate, Table Lamp, TV, Table, Showcase, Plant, Clock)
+          let bestDecor: RuntimeRoomDecor | null = null
+          let bestDecorDist = Infinity
+          myRoomRuntime.decorItems.forEach((cand) => {
+            const spec = ROOM_DECOR_CATALOG[cand.kind]
+            const reach = Math.max(spec.halfExtents[0], spec.halfExtents[1], spec.halfExtents[2]) * cand.scale + 0.16
+            const d = Math.hypot(
+              cand.pos[0] - handRes.posArr[0],
+              cand.pos[1] - handRes.posArr[1],
+              cand.pos[2] - handRes.posArr[2]
+            )
+            if (d <= reach && d < bestDecorDist) {
+              bestDecorDist = d
+              bestDecor = cand
+            }
+          })
+
+          if (bestDecor) {
+            const pickedDecor: RuntimeRoomDecor = bestDecor
+            heldDecorByHandRef.current[handRes.side] = pickedDecor.id
+            pickedDecor.isHeldByLocal = true
+            pickedDecor.ownerId = myId
+            pickedDecor.epoch += 1
+            pickedDecor.timestamp = Date.now()
+            useMyRoomStore.getState().setSelectedDecorId(pickedDecor.id)
+            pulseXRControllerHaptics(handRes.activeInput, 0.4, 28)
+            myRoomRuntime.onDecorSend?.(stripDecorToNetState(pickedDecor))
+          } else if (
+            myRoomSt.showAiOpponent &&
+            companionHoldRef.current[handRes.side] === null &&
+            useGameStore.getState().peers &&
+            (myRoomSt.opponentMode === 'computer' ||
+              (myRoomSt.opponentMode === 'auto' &&
+                Object.keys(useGameStore.getState().peers).length === 0))
+          ) {
           const ai = myRoomRuntime.ai
           const dHair = Math.hypot(
             handRes.posArr[0] - ai.hairWorldPos[0],
@@ -481,10 +563,11 @@ export function MyRoomARRig() {
             companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'left' }
             pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
             useMyRoomStore.getState().setStatusHint('Holding companion hand')
-          } else if (dRightHand < 0.19) {
-            companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'right' }
-            pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
-            useMyRoomStore.getState().setStatusHint('Holding companion hand')
+            } else if (dRightHand < 0.19) {
+              companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'right' }
+              pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
+              useMyRoomStore.getState().setStatusHint('Holding companion hand')
+            }
           }
         }
       }

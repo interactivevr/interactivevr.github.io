@@ -24,9 +24,16 @@ import {
   MyRoomOpponentMode,
   MyRoomToolMode,
   PaperShapePreset,
+  ROOM_DECOR_CATALOG,
+  RoomDecorKind,
+  RoomDecorNetState,
   RoomSurfaceCollider,
   WristToolKind,
 } from './types'
+
+export interface RuntimeRoomDecor extends RoomDecorNetState {
+  isHeldByLocal: boolean
+}
 
 export interface RuntimeCraftObject extends CraftObjectNetState {
   meshData: RuntimeCraftMeshData
@@ -70,6 +77,7 @@ export interface MyRoomAIRuntime {
 
 export const myRoomRuntime = {
   objects: new Map<string, RuntimeCraftObject>(),
+  decorItems: new Map<string, RuntimeRoomDecor>(),
   surfaces: [] as RoomSurfaceCollider[],
   floorY: 0,
   roomBoundsXZ: { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 },
@@ -120,8 +128,143 @@ export const myRoomRuntime = {
   onCraftObjectSend: null as ((obj: CraftObjectNetState, targetPeer?: string) => void) | null,
   onCraftDeformSend: null as ((deform: CraftDeformNetPayload) => void) | null,
   onCraftRemoveSend: null as ((id: string) => void) | null,
+  onDecorSend: null as ((decor: RoomDecorNetState, targetPeer?: string) => void) | null,
+  onDecorRemoveSend: null as ((id: string) => void) | null,
   onDartStateSend: null as ((state: DartStateNetPayload, targetPeer?: string) => void) | null,
   onDartThrowSend: null as ((payload: DartThrowNetPayload) => void) | null,
+}
+
+/**
+ * Returns all scanned real room surfaces PLUS virtual horizontal & shelf support surfaces
+ * created by redesigned AR furniture (Tables, Showcases, Sofas), enabling tabletop Lamp/TV/Craft placement!
+ */
+export function getCombinedRoomSurfaces(): RoomSurfaceCollider[] {
+  const out: RoomSurfaceCollider[] = [...myRoomRuntime.surfaces]
+  myRoomRuntime.decorItems.forEach((item) => {
+    if (item.isHeldByLocal) return
+    const spec = ROOM_DECOR_CATALOG[item.kind]
+    if (!spec.supportsItemsOnTop) return
+    const hx = spec.halfExtents[0] * item.scale
+    const hy = spec.halfExtents[1] * item.scale
+    const hz = spec.halfExtents[2] * item.scale
+    const cosY = Math.cos(item.yaw)
+    const sinY = Math.sin(item.yaw)
+    // Axis-aligned conservative wrapper + exact oriented local axes for tabletop physics
+    const aabbHX = Math.abs(cosY) * hx + Math.abs(sinY) * hz
+    const aabbHZ = Math.abs(sinY) * hx + Math.abs(cosY) * hz
+
+    out.push({
+      id: `decor_surf_${item.id}`,
+      label: item.kind,
+      orientation: 'horizontal',
+      center: [...item.pos],
+      halfExtents: [aabbHX, hy, aabbHZ],
+      uAxis: [cosY, 0, -sinY],
+      vAxis: [sinY, 0, cosY],
+      halfU: hx,
+      halfV: hz,
+      minY: item.pos[1] - hy,
+      maxY: item.pos[1] + hy,
+      normal: [0, 1, 0],
+    })
+
+    // Showcase also provides a handy mid-level shelf inside!
+    if (item.kind === 'showcase') {
+      const midY = item.pos[1] - hy * 0.08
+      out.push({
+        id: `decor_shelf_${item.id}`,
+        label: 'shelf',
+        orientation: 'horizontal',
+        center: [item.pos[0], midY, item.pos[2]],
+        halfExtents: [aabbHX * 0.9, 0.02, aabbHZ * 0.9],
+        uAxis: [cosY, 0, -sinY],
+        vAxis: [sinY, 0, cosY],
+        halfU: hx * 0.9,
+        halfV: hz * 0.9,
+        minY: midY - 0.02,
+        maxY: midY + 0.02,
+        normal: [0, 1, 0],
+      })
+    }
+  })
+  return out
+}
+
+export function stripDecorToNetState(d: RuntimeRoomDecor): RoomDecorNetState {
+  return {
+    id: d.id,
+    creatorId: d.creatorId,
+    ownerId: d.ownerId,
+    kind: d.kind,
+    variantIdx: d.variantIdx,
+    color: d.color,
+    pos: [...d.pos],
+    yaw: d.yaw,
+    scale: d.scale,
+    powerOn: d.powerOn,
+    epoch: d.epoch,
+    timestamp: d.timestamp,
+  }
+}
+
+export function spawnRuntimeDecor(opts: {
+  id?: string
+  creatorId: string
+  ownerId?: string | null
+  kind: RoomDecorKind
+  variantIdx?: number
+  color?: string
+  pos: [number, number, number]
+  yaw?: number
+  scale?: number
+  powerOn?: boolean
+  broadcast?: boolean
+}): RuntimeRoomDecor {
+  const id = opts.id ?? `dec_${Date.now().toString(36)}_${Math.floor(Math.random() * 1e4)}`
+  const spec = ROOM_DECOR_CATALOG[opts.kind]
+  const decor: RuntimeRoomDecor = {
+    id,
+    creatorId: opts.creatorId,
+    ownerId: opts.ownerId ?? null,
+    kind: opts.kind,
+    variantIdx: opts.variantIdx ?? 0,
+    color: opts.color ?? spec.defaultColor,
+    pos: [...opts.pos],
+    yaw: opts.yaw ?? 0,
+    scale: opts.scale ?? 1.0,
+    powerOn: opts.powerOn ?? true,
+    epoch: 1,
+    timestamp: Date.now(),
+    isHeldByLocal: false,
+  }
+  myRoomRuntime.decorItems.set(id, decor)
+  useMyRoomStore.getState().setSelectedDecorId(id)
+  useMyRoomStore.getState().bumpDecorVersion()
+  if (opts.broadcast) {
+    myRoomRuntime.onDecorSend?.(stripDecorToNetState(decor))
+  }
+  return decor
+}
+
+export function deleteRuntimeDecor(id: string, broadcast = true): void {
+  if (!myRoomRuntime.decorItems.has(id)) return
+  myRoomRuntime.decorItems.delete(id)
+  const st = useMyRoomStore.getState()
+  if (st.selectedDecorId === id) {
+    st.setSelectedDecorId(null)
+  }
+  st.bumpDecorVersion()
+  if (broadcast) {
+    myRoomRuntime.onDecorRemoveSend?.(id)
+  }
+}
+
+export function clearAllMyRoomDecor(onlyCreatorId?: string): void {
+  const ids: string[] = []
+  myRoomRuntime.decorItems.forEach((d, id) => {
+    if (!onlyCreatorId || d.creatorId === onlyCreatorId) ids.push(id)
+  })
+  ids.forEach((id) => deleteRuntimeDecor(id, true))
 }
 
 let _localObjSeq = 1
@@ -317,6 +460,10 @@ export interface MyRoomStoreState {
   testerIsLive: boolean
   showSelfBody: boolean
   showAiOpponent: boolean
+  showcaseOpen: boolean
+  selectedDecorId: string | null
+  decorCount: number
+  decorVersion: number
   opponentMode: MyRoomOpponentMode
   showRoomMesh: boolean
   scannedSurfaceCount: number
@@ -336,6 +483,9 @@ export interface MyRoomStoreState {
   setTesterState: (readout: string, isLive: boolean) => void
   setShowSelfBody: (show: boolean) => void
   setShowAiOpponent: (show: boolean) => void
+  setShowcaseOpen: (open: boolean) => void
+  setSelectedDecorId: (id: string | null) => void
+  bumpDecorVersion: () => void
   setOpponentMode: (mode: MyRoomOpponentMode) => void
   setShowRoomMesh: (show: boolean) => void
   setScannedSurfaceCount: (count: number) => void
@@ -367,6 +517,10 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
   testerIsLive: false,
   showSelfBody: true,
   showAiOpponent: true,
+  showcaseOpen: false,
+  selectedDecorId: null,
+  decorCount: 0,
+  decorVersion: 0,
   opponentMode: 'auto',
   showRoomMesh: false,
   scannedSurfaceCount: 0,
@@ -398,6 +552,13 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
   setActiveInkColor: (activeInkColor) => set({ activeInkColor }),
   setTesterState: (testerReadout, testerIsLive) => set({ testerReadout, testerIsLive }),
   setShowSelfBody: (showSelfBody) => set({ showSelfBody }),
+  setShowcaseOpen: (showcaseOpen) => set({ showcaseOpen }),
+  setSelectedDecorId: (selectedDecorId) => set({ selectedDecorId }),
+  bumpDecorVersion: () =>
+    set((s) => ({
+      decorVersion: s.decorVersion + 1,
+      decorCount: myRoomRuntime.decorItems.size,
+    })),
   setShowAiOpponent: (showAiOpponent) => {
     if (!showAiOpponent && myRoomRuntime.ai.holdingObjId) {
       const held = myRoomRuntime.objects.get(myRoomRuntime.ai.holdingObjId)
@@ -574,6 +735,7 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
 
   resetRoomSession: () => {
     clearAllMyRoomObjects()
+    clearAllMyRoomDecor()
     myRoomRuntime.surfaces = []
     myRoomRuntime.floorY = 0
     myRoomRuntime.roomBoundsXZ = { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 }
@@ -594,6 +756,10 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
     set((s) => ({
       objectCount: 0,
       objectListVersion: s.objectListVersion + 1,
+      decorCount: 0,
+      decorVersion: s.decorVersion + 1,
+      selectedDecorId: null,
+      showcaseOpen: false,
       scannedSurfaceCount: 0,
       activeTool: 'none',
       testerReadout: 'READY',
