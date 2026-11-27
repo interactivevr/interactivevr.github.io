@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { CricketHUD } from './cricket/CricketHUD'
 import { p2pClient } from './net/p2pClient'
 import { GameCanvas } from './scene/GameCanvas'
 import { useGameStore } from './store/useGameStore'
@@ -7,6 +8,7 @@ import { LobbyOverlay } from './ui/LobbyOverlay'
 
 export default function App() {
   const joined = useGameStore((s) => s.joined)
+  const activeGame = useGameStore((s) => s.activeGame)
 
   useEffect(() => {
     const onHashChange = () => {
@@ -29,7 +31,7 @@ export default function App() {
   return (
     <div className="app-root">
       <GameCanvas />
-      {!joined ? <LobbyOverlay /> : <DesktopHUD />}
+      {!joined ? <LobbyOverlay /> : activeGame === 'cricket' ? <CricketHUD /> : <DesktopHUD />}
     </div>
   )
 }

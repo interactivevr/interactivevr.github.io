@@ -1,5 +1,7 @@
 export type PlatformMode = 'vr' | 'pc'
 
+export type ActiveGame = 'catch' | 'cricket'
+
 export type GameMode = 'twin-thrower' | 'rally' | 'solo'
 
 export type PlayerRole = 'catcher' | 'thrower' | 'rally'

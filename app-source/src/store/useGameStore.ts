@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { create } from 'zustand'
+import { useCricketStore } from '../cricket/useCricketStore'
 import {
+  ActiveGame,
   AVATAR_COLORS,
   BallNetState,
   GameMode,
@@ -105,6 +107,7 @@ export function getOrCreateRemotePose(peerId: string): InterpolatedRemotePose {
 
 export interface GameStoreState {
   joined: boolean
+  activeGame: ActiveGame
   roomId: string
   playerName: string
   platform: PlatformMode
@@ -130,6 +133,7 @@ export interface GameStoreState {
   setRoomId: (roomId: string) => void
   setPlayerName: (name: string) => void
   setPlatform: (platform: PlatformMode) => void
+  setActiveGame: (game: ActiveGame) => void
   setGameMode: (mode: GameMode) => void
   setLocalPeerId: (id: string) => void
   setJoined: (joined: boolean) => void
@@ -166,6 +170,7 @@ function getInitialRoomFromUrl(): string {
 
 export const useGameStore = create<GameStoreState>((set, get) => ({
   joined: false,
+  activeGame: 'catch',
   roomId: getInitialRoomFromUrl(),
   playerName: `Player-${Math.floor(100 + Math.random() * 899)}`,
   platform: 'pc',
@@ -197,6 +202,10 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   setRoomId: (roomId) => set({ roomId: roomId.toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 12) }),
   setPlayerName: (playerName) => set({ playerName }),
   setPlatform: (platform) => set({ platform }),
+  setActiveGame: (activeGame) => {
+    set({ activeGame })
+    get().recomputeSlots()
+  },
   setGameMode: (gameMode) => {
     resetRuntimeBalls(gameMode)
     set({ gameMode })
@@ -309,6 +318,12 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       localColor,
       peers: updatedPeers,
     })
+
+    if (state.activeGame === 'cricket') {
+      useCricketStore
+        .getState()
+        .recomputeCricketAssignments(localPeerId, Object.keys(updatedPeers))
+    }
   },
 
   rotateRoles: () => {

@@ -1,6 +1,13 @@
 import { joinRoom, Room, TurnServerConfig } from 'trystero'
+import { CricketBallNetState } from '../cricket/types'
+import {
+  cricketRuntime,
+  CricketStateSyncPayload,
+  useCricketStore,
+} from '../cricket/useCricketStore'
 import { getOrCreateRemotePose, runtimeState, useGameStore } from '../store/useGameStore'
 import {
+  ActiveGame,
   AVATAR_COLORS,
   BallNetState,
   GameMode,
@@ -40,6 +47,7 @@ type ScorePayload = {
 }
 
 type ModePayload = {
+  activeGame: ActiveGame
   gameMode: GameMode
   roleRotationOffset: number
 }
@@ -158,6 +166,8 @@ class P2PGameClient {
   private sendBallFn: ((data: BallPayload, target?: string) => void) | null = null
   private sendScoreFn: ((data: ScorePayload) => void) | null = null
   private sendModeFn: ((data: ModePayload, target?: string) => void) | null = null
+  private sendCricketBallFn: ((data: CricketBallNetState, target?: string) => void) | null = null
+  private sendCricketStateFn: ((data: CricketStateSyncPayload, target?: string) => void) | null = null
   private poseInterval: number | null = null
   private localJoinedAt = Date.now()
 
@@ -199,6 +209,8 @@ class P2PGameClient {
     const ballAction = room.makeAction<BallPayload>('ball')
     const scoreAction = room.makeAction<ScorePayload>('score')
     const modeAction = room.makeAction<ModePayload>('mode')
+    const cBallAction = room.makeAction<CricketBallNetState>('cBall')
+    const cStateAction = room.makeAction<CricketStateSyncPayload>('cState')
     const clkPingAction = room.makeAction<ClockPingPayload>('clkP')
     const clkPongAction = room.makeAction<ClockPongPayload>('clkA')
 
@@ -220,6 +232,21 @@ class P2PGameClient {
     this.sendModeFn = (data, target) => {
       if (Object.keys(useGameStore.getState().peers).length === 0) return
       void modeAction.send(data, target ? { target } : undefined).catch(() => {})
+    }
+    this.sendCricketBallFn = (data, target) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void cBallAction.send(data, target ? { target } : undefined).catch(() => {})
+    }
+    this.sendCricketStateFn = (data, target) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void cStateAction.send(data, target ? { target } : undefined).catch(() => {})
+    }
+
+    cricketRuntime.onCricketBallSend = (ball) => {
+      this.sendCricketBallFn?.({ ...ball, pos: [...ball.pos], vel: [...ball.vel], spin: [...ball.spin] })
+    }
+    cricketRuntime.onCricketStateSend = (payload) => {
+      this.sendCricketStateFn?.(payload)
     }
 
     runtimeState.onBallStateSend = (ball: BallNetState) => {
@@ -317,13 +344,63 @@ class P2PGameClient {
 
     modeAction.onMessage((data) => {
       const curr = useGameStore.getState()
-      if (curr.gameMode !== data.gameMode || curr.roleRotationOffset !== data.roleRotationOffset) {
+      if (
+        curr.activeGame !== data.activeGame ||
+        curr.gameMode !== data.gameMode ||
+        curr.roleRotationOffset !== data.roleRotationOffset
+      ) {
         useGameStore.setState({
+          activeGame: data.activeGame,
           gameMode: data.gameMode,
           roleRotationOffset: data.roleRotationOffset,
         })
         curr.recomputeSlots()
       }
+    })
+
+    cBallAction.onMessage((incoming, { peerId }) => {
+      const curr = cricketRuntime.ball
+      if (incoming.epoch > curr.epoch || (incoming.epoch === curr.epoch && incoming.ownerId === curr.ownerId)) {
+        const peerInfo = useGameStore.getState().peers[peerId]
+        const offsetMs = peerInfo?.clockOffsetMs ?? 0
+        const elapsedSec =
+          incoming.phase === 'bowled' || incoming.phase === 'hit'
+            ? Math.max(0, Math.min(0.28, (Date.now() - (incoming.timestamp + offsetMs)) / 1000))
+            : 0
+
+        curr.phase = incoming.phase
+        curr.ownerId = incoming.ownerId
+        curr.epoch = incoming.epoch
+        curr.spin = [...incoming.spin]
+        curr.bowlingStyle = incoming.bowlingStyle
+        curr.spinDir = incoming.spinDir
+        curr.bouncedOnPitch = incoming.bouncedOnPitch
+        curr.bouncedAfterHit = incoming.bouncedAfterHit
+        curr.hitByBat = incoming.hitByBat
+        curr.edgeContact = incoming.edgeContact
+        curr.timestamp = incoming.timestamp
+        curr.deadTimerSec = 0
+
+        if (elapsedSec > 0.004) {
+          curr.vel = [incoming.vel[0], incoming.vel[1] - 9.81 * elapsedSec, incoming.vel[2]]
+          curr.pos = [
+            incoming.pos[0] + incoming.vel[0] * elapsedSec,
+            Math.max(0.042, incoming.pos[1] + incoming.vel[1] * elapsedSec - 0.5 * 9.81 * elapsedSec * elapsedSec),
+            incoming.pos[2] + incoming.vel[2] * elapsedSec,
+          ]
+          curr.prevPos = [...curr.pos]
+        } else {
+          curr.pos = [...incoming.pos]
+          curr.prevPos = [...incoming.pos]
+          curr.vel = [...incoming.vel]
+        }
+      }
+    })
+
+    cStateAction.onMessage((payload) => {
+      useCricketStore
+        .getState()
+        .applyNetworkCricketState(payload, useGameStore.getState().localPeerId)
     })
 
     clkPingAction.onMessage((data, { peerId }) => {
@@ -361,10 +438,15 @@ class P2PGameClient {
       const allSorted = [st.localPeerId, ...Object.keys(st.peers), peerId].filter(Boolean).sort()
       if (allSorted[0] === st.localPeerId) {
         this.sendModeFn?.(
-          { gameMode: st.gameMode, roleRotationOffset: st.roleRotationOffset },
+          { activeGame: st.activeGame, gameMode: st.gameMode, roleRotationOffset: st.roleRotationOffset },
           peerId
         )
-        runtimeState.balls.forEach((b) => this.sendBallFn?.(b, peerId))
+        if (st.activeGame === 'cricket') {
+          this.sendCricketStateFn?.(useCricketStore.getState().getSyncPayload(), peerId)
+          this.sendCricketBallFn?.(cricketRuntime.ball, peerId)
+        } else {
+          runtimeState.balls.forEach((b) => this.sendBallFn?.(b, peerId))
+        }
       }
 
       const stream = voiceAudio.getLocalStream()
@@ -427,9 +509,14 @@ class P2PGameClient {
   broadcastModeAndRoles(): void {
     const st = useGameStore.getState()
     this.sendModeFn?.({
+      activeGame: st.activeGame,
       gameMode: st.gameMode,
       roleRotationOffset: st.roleRotationOffset,
     })
+  }
+
+  broadcastCricketState(): void {
+    this.sendCricketStateFn?.(useCricketStore.getState().getSyncPayload())
   }
 
   broadcastBall(ball: BallNetState): void {
@@ -443,11 +530,15 @@ class P2PGameClient {
     }
     runtimeState.onBallStateSend = null
     runtimeState.onScoreEventSend = null
+    cricketRuntime.onCricketBallSend = null
+    cricketRuntime.onCricketStateSend = null
     this.sendHelloFn = null
     this.sendPoseFn = null
     this.sendBallFn = null
     this.sendScoreFn = null
     this.sendModeFn = null
+    this.sendCricketBallFn = null
+    this.sendCricketStateFn = null
 
     if (this.room) {
       try {

@@ -1,6 +1,7 @@
 import { Canvas } from '@react-three/fiber'
 import { XR } from '@react-three/xr'
 import { useEffect } from 'react'
+import { CricketArena } from '../cricket/CricketArena'
 import { useGameStore } from '../store/useGameStore'
 import { DesktopPlayerRig } from '../xr/DesktopPlayerRig'
 import { xrStore } from '../xr/xrStore'
@@ -11,6 +12,7 @@ import { LocalHandsAndRig } from './LocalHandsAndRig'
 import { RemoteAvatars } from './RemoteAvatars'
 
 export function GameCanvas() {
+  const activeGame = useGameStore((s) => s.activeGame)
   useEffect(() => {
     let cancelled = false
 
@@ -47,16 +49,22 @@ export function GameCanvas() {
   return (
     <Canvas
       dpr={[1, 1.5]}
-      camera={{ fov: 72, near: 0.08, far: 120, position: [0, 1.62, 5.4] }}
+      camera={{ fov: 72, near: 0.08, far: 180, position: [0, 1.62, 5.4] }}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
     >
       <XR store={xrStore}>
-        <ArenaEnvironment />
-        <DesktopPlayerRig />
-        <LocalHandsAndRig />
-        <BallManager />
-        <RemoteAvatars />
-        <InWorldUI />
+        {activeGame === 'cricket' ? (
+          <CricketArena />
+        ) : (
+          <>
+            <ArenaEnvironment />
+            <DesktopPlayerRig />
+            <LocalHandsAndRig />
+            <BallManager />
+            <RemoteAvatars />
+            <InWorldUI />
+          </>
+        )}
       </XR>
     </Canvas>
   )
