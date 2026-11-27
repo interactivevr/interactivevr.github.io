@@ -5,10 +5,19 @@ import {
   CricketStateSyncPayload,
   useCricketStore,
 } from '../cricket/useCricketStore'
+import { applyQuantizedDeform } from '../myroom/craftEngine'
+import { CraftDeformNetPayload, CraftObjectNetState } from '../myroom/types'
+import {
+  deleteRuntimeCraftObject,
+  myRoomRuntime,
+  spawnRuntimeCraftObject,
+  stripToNetState,
+} from '../myroom/useMyRoomStore'
 import { getOrCreateRemotePose, runtimeState, useGameStore } from '../store/useGameStore'
 import {
   ActiveGame,
   AVATAR_COLORS,
+  AvatarGender,
   BallNetState,
   GameMode,
   PeerPose,
@@ -21,6 +30,7 @@ const APP_ID = 'interactivevr-github-io-catch-v1'
 type HelloPayload = {
   name: string
   platform: PlatformMode
+  avatarGender?: AvatarGender
   joinedAt: number
   micMuted: boolean
 }
@@ -168,6 +178,9 @@ class P2PGameClient {
   private sendModeFn: ((data: ModePayload, target?: string) => void) | null = null
   private sendCricketBallFn: ((data: CricketBallNetState, target?: string) => void) | null = null
   private sendCricketStateFn: ((data: CricketStateSyncPayload, target?: string) => void) | null = null
+  private sendMyRoomObjFn: ((data: CraftObjectNetState, target?: string) => void) | null = null
+  private sendMyRoomDeformFn: ((data: CraftDeformNetPayload) => void) | null = null
+  private sendMyRoomDelFn: ((data: { id: string }) => void) | null = null
   private poseInterval: number | null = null
   private localJoinedAt = Date.now()
 
@@ -211,6 +224,9 @@ class P2PGameClient {
     const modeAction = room.makeAction<ModePayload>('mode')
     const cBallAction = room.makeAction<CricketBallNetState>('cBall')
     const cStateAction = room.makeAction<CricketStateSyncPayload>('cState')
+    const mrObjAction = room.makeAction<CraftObjectNetState>('mrObj')
+    const mrDeformAction = room.makeAction<CraftDeformNetPayload>('mrDef')
+    const mrDelAction = room.makeAction<{ id: string }>('mrDel')
     const clkPingAction = room.makeAction<ClockPingPayload>('clkP')
     const clkPongAction = room.makeAction<ClockPongPayload>('clkA')
 
@@ -240,6 +256,28 @@ class P2PGameClient {
     this.sendCricketStateFn = (data, target) => {
       if (Object.keys(useGameStore.getState().peers).length === 0) return
       void cStateAction.send(data, target ? { target } : undefined).catch(() => {})
+    }
+    this.sendMyRoomObjFn = (data, target) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void mrObjAction.send(data, target ? { target } : undefined).catch(() => {})
+    }
+    this.sendMyRoomDeformFn = (data) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void mrDeformAction.send(data).catch(() => {})
+    }
+    this.sendMyRoomDelFn = (data) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void mrDelAction.send(data).catch(() => {})
+    }
+
+    myRoomRuntime.onCraftObjectSend = (obj, target) => {
+      this.sendMyRoomObjFn?.(obj, target)
+    }
+    myRoomRuntime.onCraftDeformSend = (deform) => {
+      this.sendMyRoomDeformFn?.(deform)
+    }
+    myRoomRuntime.onCraftRemoveSend = (id) => {
+      this.sendMyRoomDelFn?.({ id })
     }
 
     cricketRuntime.onCricketBallSend = (ball) => {
@@ -276,6 +314,7 @@ class P2PGameClient {
         id: peerId,
         name: data.name || `Player-${peerId.slice(0, 4)}`,
         platform: data.platform,
+        avatarGender: data.avatarGender ?? 'male',
         role: existing?.role ?? 'thrower',
         slotIndex: existing?.slotIndex ?? 1,
         color: existing?.color ?? AVATAR_COLORS[1],
@@ -418,6 +457,47 @@ class P2PGameClient {
         .applyNetworkCricketState(payload, useGameStore.getState().localPeerId)
     })
 
+    mrObjAction.onMessage((incoming) => {
+      const existing = myRoomRuntime.objects.get(incoming.id)
+      if (!existing) {
+        const created = spawnRuntimeCraftObject({
+          ...incoming,
+          broadcast: false,
+        })
+        created.isHeldByLocal = false
+        applyQuantizedDeform(created.meshData, incoming.deformQ)
+      } else if (
+        !existing.isHeldByLocal &&
+        (incoming.epoch > existing.epoch ||
+          (incoming.epoch === existing.epoch && incoming.ownerId === existing.ownerId))
+      ) {
+        existing.ownerId = incoming.ownerId
+        existing.epoch = incoming.epoch
+        existing.pos = [...incoming.pos]
+        existing.quat = [...incoming.quat]
+        existing.vel = [...incoming.vel]
+        existing.crumpleFactor = incoming.crumpleFactor
+        existing.deformQ = [...incoming.deformQ]
+        existing.timestamp = incoming.timestamp
+        applyQuantizedDeform(existing.meshData, incoming.deformQ)
+      }
+    })
+
+    mrDeformAction.onMessage((deform) => {
+      const existing = myRoomRuntime.objects.get(deform.id)
+      if (!existing || existing.isHeldByLocal) return
+      existing.pos = [...deform.pos]
+      existing.quat = [...deform.quat]
+      existing.crumpleFactor = deform.crumpleFactor
+      existing.deformQ = [...deform.deformQ]
+      existing.timestamp = deform.timestamp
+      applyQuantizedDeform(existing.meshData, deform.deformQ)
+    })
+
+    mrDelAction.onMessage((data) => {
+      deleteRuntimeCraftObject(data.id, false)
+    })
+
     clkPingAction.onMessage((data, { peerId }) => {
       void clkPongAction.send({ t0: data.t0, t1: Date.now() }, { target: peerId }).catch(() => {})
     })
@@ -443,13 +523,14 @@ class P2PGameClient {
         {
           name: st.playerName,
           platform: st.inXR ? 'vr' : st.platform,
+          avatarGender: st.avatarGender,
           joinedAt: this.localJoinedAt,
           micMuted: !st.micEnabled,
         },
         peerId
       )
 
-      // Lowest peerId shares authoritative room mode & ball snapshot
+      // Lowest peerId shares authoritative room mode & game object snapshots
       const allSorted = [st.localPeerId, ...Object.keys(st.peers), peerId].filter(Boolean).sort()
       if (allSorted[0] === st.localPeerId) {
         this.sendModeFn?.(
@@ -459,6 +540,8 @@ class P2PGameClient {
         if (st.activeGame === 'cricket') {
           this.sendCricketStateFn?.(useCricketStore.getState().getSyncPayload(), peerId)
           this.sendCricketBallFn?.(cricketRuntime.ball, peerId)
+        } else if (st.activeGame === 'myroom') {
+          myRoomRuntime.objects.forEach((o) => this.sendMyRoomObjFn?.(stripToNetState(o), peerId))
         } else {
           runtimeState.balls.forEach((b) => this.sendBallFn?.(b, peerId))
         }
@@ -516,6 +599,7 @@ class P2PGameClient {
     this.sendHelloFn?.({
       name: st.playerName,
       platform: st.inXR ? 'vr' : st.platform,
+      avatarGender: st.avatarGender,
       joinedAt: this.localJoinedAt,
       micMuted: !st.micEnabled,
     })
@@ -547,6 +631,9 @@ class P2PGameClient {
     runtimeState.onScoreEventSend = null
     cricketRuntime.onCricketBallSend = null
     cricketRuntime.onCricketStateSend = null
+    myRoomRuntime.onCraftObjectSend = null
+    myRoomRuntime.onCraftDeformSend = null
+    myRoomRuntime.onCraftRemoveSend = null
     this.sendHelloFn = null
     this.sendPoseFn = null
     this.sendBallFn = null
@@ -554,6 +641,9 @@ class P2PGameClient {
     this.sendModeFn = null
     this.sendCricketBallFn = null
     this.sendCricketStateFn = null
+    this.sendMyRoomObjFn = null
+    this.sendMyRoomDeformFn = null
+    this.sendMyRoomDelFn = null
 
     if (this.room) {
       try {

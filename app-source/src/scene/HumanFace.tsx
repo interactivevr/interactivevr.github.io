@@ -1,63 +1,79 @@
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
+import { AvatarGender } from '../types/game'
 
 export interface AthleteLookProfile {
   skinColor: string
   skinShadow: string
   hairColor: string
   eyeColor: string
+  lipColor: string
   hasBeard: boolean
-  hairStyle: 'short' | 'fade' | 'curly'
+  hairStyle: 'short' | 'fade' | 'curly' | 'ponytail' | 'long' | 'bob'
   hasSunglasses: boolean
 }
 
-const ATHLETE_PRESETS: readonly AthleteLookProfile[] = [
-  { skinColor: '#e2b18c', skinShadow: '#c78c67', hairColor: '#1f1712', eyeColor: '#3b2818', hasBeard: true, hairStyle: 'fade', hasSunglasses: false },
-  { skinColor: '#c98b63', skinShadow: '#a66a44', hairColor: '#141110', eyeColor: '#291c14', hasBeard: true, hairStyle: 'short', hasSunglasses: true },
-  { skinColor: '#8d5534', skinShadow: '#6c3e23', hairColor: '#111111', eyeColor: '#1f1612', hasBeard: false, hairStyle: 'curly', hasSunglasses: false },
-  { skinColor: '#f1c7a7', skinShadow: '#d49d79', hairColor: '#4b3320', eyeColor: '#2563eb', hasBeard: false, hairStyle: 'short', hasSunglasses: false },
-  { skinColor: '#b57850', skinShadow: '#8e5735', hairColor: '#181412', eyeColor: '#2b1e16', hasBeard: true, hairStyle: 'curly', hasSunglasses: true },
-  { skinColor: '#d9a17b', skinShadow: '#b87d58', hairColor: '#2c1e16', eyeColor: '#15803d', hasBeard: false, hairStyle: 'fade', hasSunglasses: false },
+const MALE_PRESETS: readonly AthleteLookProfile[] = [
+  { skinColor: '#e2b18c', skinShadow: '#c78c67', hairColor: '#1f1712', eyeColor: '#3b2818', lipColor: '#b0645b', hasBeard: true, hairStyle: 'fade', hasSunglasses: false },
+  { skinColor: '#c98b63', skinShadow: '#a66a44', hairColor: '#141110', eyeColor: '#291c14', lipColor: '#9c564f', hasBeard: true, hairStyle: 'short', hasSunglasses: true },
+  { skinColor: '#8d5534', skinShadow: '#6c3e23', hairColor: '#111111', eyeColor: '#1f1612', lipColor: '#78413a', hasBeard: false, hairStyle: 'curly', hasSunglasses: false },
+  { skinColor: '#f1c7a7', skinShadow: '#d49d79', hairColor: '#4b3320', eyeColor: '#2563eb', lipColor: '#be6e67', hasBeard: false, hairStyle: 'short', hasSunglasses: false },
+  { skinColor: '#b57850', skinShadow: '#8e5735', hairColor: '#181412', eyeColor: '#2b1e16', lipColor: '#944f48', hasBeard: true, hairStyle: 'curly', hasSunglasses: true },
+  { skinColor: '#d9a17b', skinShadow: '#b87d58', hairColor: '#2c1e16', eyeColor: '#15803d', lipColor: '#ab6058', hasBeard: false, hairStyle: 'fade', hasSunglasses: false },
 ] as const
 
-export function getAthleteProfile(seedKey: string | number): AthleteLookProfile {
+const FEMALE_PRESETS: readonly AthleteLookProfile[] = [
+  { skinColor: '#ecc09e', skinShadow: '#cf9873', hairColor: '#241711', eyeColor: '#3b2818', lipColor: '#b9535c', hasBeard: false, hairStyle: 'long', hasSunglasses: false },
+  { skinColor: '#cfa07a', skinShadow: '#ac7953', hairColor: '#161110', eyeColor: '#2c1d13', lipColor: '#a64952', hasBeard: false, hairStyle: 'ponytail', hasSunglasses: false },
+  { skinColor: '#935c3b', skinShadow: '#714227', hairColor: '#121010', eyeColor: '#241711', lipColor: '#8d3f48', hasBeard: false, hairStyle: 'curly', hasSunglasses: false },
+  { skinColor: '#f3ccb0', skinShadow: '#d6a483', hairColor: '#5c3921', eyeColor: '#2563eb', lipColor: '#c76168', hasBeard: false, hairStyle: 'bob', hasSunglasses: false },
+  { skinColor: '#be845d', skinShadow: '#98603c', hairColor: '#1d1410', eyeColor: '#15803d', lipColor: '#ad4f57', hasBeard: false, hairStyle: 'ponytail', hasSunglasses: false },
+  { skinColor: '#dfb08c', skinShadow: '#bd8964', hairColor: '#382214', eyeColor: '#4338ca', lipColor: '#bf5962', hasBeard: false, hairStyle: 'long', hasSunglasses: false },
+] as const
+
+export function getAthleteProfile(seedKey: string | number, gender: AvatarGender = 'male'): AthleteLookProfile {
+  const pool = gender === 'female' ? FEMALE_PRESETS : MALE_PRESETS
   if (typeof seedKey === 'number') {
-    return ATHLETE_PRESETS[Math.abs(seedKey) % ATHLETE_PRESETS.length]
+    return pool[Math.abs(seedKey) % pool.length]
   }
   let hash = 0
   for (let i = 0; i < seedKey.length; i++) {
     hash = (hash * 31 + seedKey.charCodeAt(i)) | 0
   }
-  return ATHLETE_PRESETS[Math.abs(hash) % ATHLETE_PRESETS.length]
+  return pool[Math.abs(hash) % pool.length]
 }
 
-function createSkinCanvasTexture(profile: AthleteLookProfile): THREE.CanvasTexture {
+function createSkinCanvasTexture(profile: AthleteLookProfile, gender: AvatarGender): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
-  canvas.width = 256
-  canvas.height = 256
+  canvas.width = 512
+  canvas.height = 512
   const ctx = canvas.getContext('2d')!
 
-  // Soft shaded skin gradient (warm cheek highlights + subtle jaw shadow)
-  const grad = ctx.createRadialGradient(128, 118, 28, 128, 132, 138)
+  // High-DPI shaded facial skin gradient with forehead/cheek highlights & jaw depth
+  const grad = ctx.createRadialGradient(256, 224, 56, 256, 260, 270)
   grad.addColorStop(0, profile.skinColor)
-  grad.addColorStop(0.75, profile.skinColor)
+  grad.addColorStop(0.7, profile.skinColor)
   grad.addColorStop(1, profile.skinShadow)
   ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 256, 256)
+  ctx.fillRect(0, 0, 512, 512)
 
-  // Subtle rosy athletic cheek blush
-  ctx.fillStyle = 'rgba(220, 110, 95, 0.14)'
+  // Soft cheekbone blush & warmth
+  ctx.fillStyle = gender === 'female' ? 'rgba(225, 105, 110, 0.16)' : 'rgba(210, 110, 95, 0.11)'
   ctx.beginPath()
-  ctx.ellipse(90, 142, 22, 14, 0, 0, Math.PI * 2)
-  ctx.ellipse(166, 142, 22, 14, 0, 0, Math.PI * 2)
+  ctx.ellipse(178, 286, 46, 28, -0.1, 0, Math.PI * 2)
+  ctx.ellipse(334, 286, 46, 28, 0.1, 0, Math.PI * 2)
   ctx.fill()
 
-  // Optional stubble / beard shading on lower jaw
-  if (profile.hasBeard) {
+  // Subtle nose bridge highlight & temple shading
+  ctx.fillStyle = 'rgba(255, 240, 225, 0.12)'
+  ctx.fillRect(244, 210, 24, 92)
+
+  // Optional stubble / beard shading on lower jaw (male only)
+  if (profile.hasBeard && gender === 'male') {
     ctx.fillStyle = 'rgba(20, 15, 12, 0.34)'
     ctx.beginPath()
-    ctx.ellipse(128, 198, 62, 46, 0, 0, Math.PI)
+    ctx.ellipse(256, 396, 124, 92, 0, 0, Math.PI)
     ctx.fill()
   }
 
@@ -69,14 +85,16 @@ function createSkinCanvasTexture(profile: AthleteLookProfile): THREE.CanvasTextu
 
 /**
  * Detailed sculpted 3D human head with realistic face features (3D eyes with blinking,
- * eyebrows, nose, lips, ears, sculpted hair, optional beard & sunglasses, and neck).
+ * eyebrows, eyelashes, nose, lips, ears, styled 3D hair for male/female profiles, and neck).
  */
 export function HumanFaceHead({
   profile,
+  gender = 'male',
   showHair = true,
   allowSunglasses = true,
 }: {
   profile: AthleteLookProfile
+  gender?: AvatarGender
   showHair?: boolean
   allowSunglasses?: boolean
 }) {
@@ -84,13 +102,14 @@ export function HumanFaceHead({
   const rightLidRef = useRef<THREE.Mesh>(null)
   const blinkSeed = useMemo(() => Math.random() * 4.5, [])
 
-  const skinTex = useMemo(() => createSkinCanvasTexture(profile), [profile])
+  const skinTex = useMemo(() => createSkinCanvasTexture(profile, gender), [profile, gender])
   useEffect(() => {
     return () => skinTex.dispose()
   }, [skinTex])
 
+  const isFemale = gender === 'female'
+
   useFrame((state) => {
-    // Natural periodic blink every ~3.5 seconds
     const cycle = (state.clock.elapsedTime + blinkSeed) % 3.6
     const blinking = cycle > 3.46
     const scaleY = blinking ? 1.0 : 0.05
@@ -100,21 +119,21 @@ export function HumanFaceHead({
 
   return (
     <group>
-      {/* Anatomical Neck */}
+      {/* Anatomical Neck (slightly slenderer for female preset) */}
       <mesh position={[0, -0.145, 0.015]}>
-        <cylinderGeometry args={[0.054, 0.064, 0.12, 12]} />
-        <meshStandardMaterial color={profile.skinShadow} roughness={0.62} />
+        <cylinderGeometry args={[isFemale ? 0.044 : 0.054, isFemale ? 0.052 : 0.064, 0.125, 16]} />
+        <meshStandardMaterial color={profile.skinShadow} roughness={0.6} />
       </mesh>
 
-      {/* Sculpted Cranium & Jaw (slight athletic oval along Y and Z) */}
-      <mesh scale={[0.92, 1.08, 0.98]}>
-        <sphereGeometry args={[0.128, 22, 18]} />
-        <meshStandardMaterial map={skinTex} roughness={0.58} metalness={0.02} />
+      {/* Sculpted Cranium & Facial Volume */}
+      <mesh scale={[isFemale ? 0.88 : 0.92, 1.07, 0.97]}>
+        <sphereGeometry args={[0.126, 26, 20]} />
+        <meshStandardMaterial map={skinTex} roughness={0.55} metalness={0.02} />
       </mesh>
-      {/* Lower Jaw / Chin sculpt */}
-      <mesh position={[0, -0.055, -0.024]} scale={[0.78, 0.85, 0.88]}>
-        <sphereGeometry args={[0.095, 16, 12]} />
-        <meshStandardMaterial map={skinTex} roughness={0.6} />
+      {/* Cheekbones & Tapered Chin / Jawline */}
+      <mesh position={[0, -0.054, -0.022]} scale={[isFemale ? 0.68 : 0.78, 0.84, 0.86]}>
+        <sphereGeometry args={[0.092, 18, 14]} />
+        <meshStandardMaterial map={skinTex} roughness={0.56} />
       </mesh>
 
       {/* Left & Right Ears */}
@@ -145,14 +164,21 @@ export function HumanFaceHead({
           </mesh>
           {/* Iris */}
           <mesh position={[0, 0, -0.0075]} scale={[1, 1, 0.45]}>
-            <sphereGeometry args={[0.0085, 10, 8]} />
-            <meshStandardMaterial color={profile.eyeColor} roughness={0.2} />
+            <sphereGeometry args={[0.0085, 12, 10]} />
+            <meshStandardMaterial color={profile.eyeColor} roughness={0.14} metalness={0.08} />
           </mesh>
           {/* Pupil */}
           <mesh position={[0, 0, -0.01]} scale={[1, 1, 0.4]}>
             <sphereGeometry args={[0.0044, 8, 8]} />
             <meshBasicMaterial color="#09090b" />
           </mesh>
+          {/* Subtle upper eyelashes */}
+          {isFemale && (
+            <mesh position={[0, 0.011, -0.009]} rotation={[0.18, 0, i === 0 ? 0.12 : -0.12]}>
+              <boxGeometry args={[0.03, 0.003, 0.006]} />
+              <meshBasicMaterial color="#18181b" />
+            </mesh>
+          )}
           {/* Eyelid */}
           <mesh
             ref={i === 0 ? leftLidRef : rightLidRef}
@@ -170,32 +196,31 @@ export function HumanFaceHead({
         <mesh
           key={i}
           position={[ex, 0.042, -0.113]}
-          rotation={[0, 0, i === 0 ? 0.08 : -0.08]}
+          rotation={[0, 0, (i === 0 ? 1 : -1) * (isFemale ? 0.14 : 0.08)]}
         >
-          <boxGeometry args={[0.036, 0.008, 0.014]} />
+          <boxGeometry args={[0.034, isFemale ? 0.0055 : 0.0085, 0.012]} />
           <meshStandardMaterial color={profile.hairColor} roughness={0.8} />
         </mesh>
       ))}
 
-      {/* Mouth / Lips */}
-      <mesh position={[0, -0.062, -0.111]} scale={[1.35, 0.52, 0.65]}>
-        <sphereGeometry args={[0.018, 12, 8]} />
-        <meshStandardMaterial color="#a85a52" roughness={0.5} />
+      {/* Mouth / Sculpted Upper & Lower Lips */}
+      <mesh position={[0, -0.062, -0.111]} scale={[isFemale ? 1.25 : 1.35, isFemale ? 0.62 : 0.52, 0.65]}>
+        <sphereGeometry args={[0.018, 14, 10]} />
+        <meshStandardMaterial color={profile.lipColor} roughness={0.42} />
       </mesh>
-      {/* Mouth line / athletic expression */}
+      {/* Mouth line / expression */}
       <mesh position={[0, -0.061, -0.121]}>
-        <boxGeometry args={[0.036, 0.003, 0.004]} />
+        <boxGeometry args={[0.032, 0.0025, 0.004]} />
         <meshBasicMaterial color="#4a221d" />
       </mesh>
 
-      {/* 3D Chin & Jaw Beard */}
-      {profile.hasBeard && (
+      {/* 3D Chin & Jaw Beard (Male only) */}
+      {!isFemale && profile.hasBeard && (
         <group>
           <mesh position={[0, -0.072, -0.056]} scale={[0.84, 0.78, 0.82]}>
             <sphereGeometry args={[0.088, 14, 10, 0, Math.PI * 2, Math.PI * 0.42, Math.PI * 0.58]} />
             <meshStandardMaterial color={profile.hairColor} roughness={0.9} />
           </mesh>
-          {/* Mustache */}
           <mesh position={[0, -0.045, -0.118]}>
             <boxGeometry args={[0.046, 0.009, 0.014]} />
             <meshStandardMaterial color={profile.hairColor} roughness={0.9} />
@@ -221,24 +246,58 @@ export function HumanFaceHead({
         </group>
       )}
 
-      {/* Sculpted 3D Hair */}
+      {/* Sculpted 3D Hair for Male & Female Presets */}
       {showHair && (
         <group position={[0, 0.032, 0.006]}>
-          <mesh scale={[0.96, 0.96, 1.0]}>
-            <sphereGeometry args={[0.128, 18, 12, 0, Math.PI * 2, 0, Math.PI * 0.54]} />
-            <meshStandardMaterial color={profile.hairColor} roughness={0.85} />
+          <mesh scale={[isFemale ? 0.94 : 0.96, 0.96, 1.0]}>
+            <sphereGeometry args={[0.128, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56]} />
+            <meshStandardMaterial color={profile.hairColor} roughness={0.78} />
           </mesh>
           {profile.hairStyle === 'curly' && (
             <mesh position={[0, 0.068, -0.02]} scale={[1.05, 0.65, 1.02]}>
               <sphereGeometry args={[0.105, 14, 10]} />
-              <meshStandardMaterial color={profile.hairColor} roughness={0.95} />
+              <meshStandardMaterial color={profile.hairColor} roughness={0.92} />
             </mesh>
           )}
           {profile.hairStyle === 'short' && (
             <mesh position={[0, 0.072, -0.035]} rotation={[-0.25, 0, 0]} scale={[1.0, 0.52, 0.95]}>
               <sphereGeometry args={[0.095, 12, 10]} />
-              <meshStandardMaterial color={profile.hairColor} roughness={0.85} />
+              <meshStandardMaterial color={profile.hairColor} roughness={0.82} />
             </mesh>
+          )}
+          {(profile.hairStyle === 'long' || profile.hairStyle === 'bob') && (
+            <group>
+              {/* Back hair cape draping behind neck/shoulders */}
+              <mesh position={[0, -0.11, 0.072]} rotation={[0.14, 0, 0]} scale={[1.1, 1.0, 0.46]}>
+                <cylinderGeometry
+                  args={[0.118, profile.hairStyle === 'long' ? 0.138 : 0.122, profile.hairStyle === 'long' ? 0.34 : 0.18, 18]}
+                />
+                <meshStandardMaterial color={profile.hairColor} roughness={0.72} />
+              </mesh>
+              {/* Left & Right framing locks */}
+              {[-0.098, 0.098].map((hx, idx) => (
+                <mesh
+                  key={idx}
+                  position={[hx, -0.085, -0.01]}
+                  rotation={[0.08, 0, idx === 0 ? -0.12 : 0.12]}
+                >
+                  <capsuleGeometry args={[0.028, profile.hairStyle === 'long' ? 0.22 : 0.11, 6, 10]} />
+                  <meshStandardMaterial color={profile.hairColor} roughness={0.72} />
+                </mesh>
+              ))}
+            </group>
+          )}
+          {profile.hairStyle === 'ponytail' && (
+            <group position={[0, 0.02, 0.12]}>
+              <mesh rotation={[0.85, 0, 0]}>
+                <torusGeometry args={[0.024, 0.008, 8, 16]} />
+                <meshStandardMaterial color="#f43f5e" roughness={0.45} />
+              </mesh>
+              <mesh position={[0, -0.12, 0.06]} rotation={[-0.45, 0, 0]}>
+                <capsuleGeometry args={[0.032, 0.2, 8, 12]} />
+                <meshStandardMaterial color={profile.hairColor} roughness={0.74} />
+              </mesh>
+            </group>
           )}
         </group>
       )}

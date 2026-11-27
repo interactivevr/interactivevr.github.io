@@ -2,6 +2,7 @@ import { QRCodeSVG } from 'qrcode.react'
 import { useMemo, useState } from 'react'
 import { unlockAudioContext } from '../audio/sfx'
 import { resetCricketBallToBowler, useCricketStore } from '../cricket/useCricketStore'
+import { useMyRoomStore } from '../myroom/useMyRoomStore'
 import { p2pClient } from '../net/p2pClient'
 import { voiceAudio } from '../net/voiceAudio'
 import { resetRuntimeBalls, useGameStore } from '../store/useGameStore'
@@ -23,7 +24,12 @@ export function LobbyOverlay() {
   const playerName = useGameStore((s) => s.playerName)
   const gameMode = useGameStore((s) => s.gameMode)
   const xrSupported = useGameStore((s) => s.xrSupported)
+  const arSupported = useGameStore((s) => s.arSupported)
+  const avatarGender = useGameStore((s) => s.avatarGender)
+  const aiAvatarGender = useGameStore((s) => s.aiAvatarGender)
   const micEnabled = useGameStore((s) => s.micEnabled)
+
+  const opponentMode = useMyRoomStore((s) => s.opponentMode)
 
   const cricketFormat = useCricketStore((s) => s.format)
   const pitchMode = useCricketStore((s) => s.pitchMode)
@@ -53,13 +59,22 @@ export function LobbyOverlay() {
 
   const startSession = (targetPlatform: PlatformMode) => {
     if (joining) return
+    const game = useGameStore.getState().activeGame
+    if (game === 'myroom' && !useGameStore.getState().arSupported) {
+      useGameStore
+        .getState()
+        .setStatusBanner('MyRoom Mixed Reality requires a Meta Quest or AR-supported browser.')
+      return
+    }
     const cleanRoom = roomId.trim() || 'CATCH1'
     useGameStore.getState().setRoomId(cleanRoom)
     useGameStore.getState().setPlatform(targetPlatform)
-    if (useGameStore.getState().activeGame === 'cricket') {
+    if (game === 'cricket') {
       useCricketStore.getState().resetMatch()
       useCricketStore.getState().recomputeCricketAssignments('local', [])
       resetCricketBallToBowler()
+    } else if (game === 'myroom') {
+      useMyRoomStore.getState().resetRoomSession()
     } else {
       resetRuntimeBalls(useGameStore.getState().gameMode)
     }
@@ -68,8 +83,14 @@ export function LobbyOverlay() {
     unlockAudioContext()
     voiceAudio.resumeContext()
 
-    // Enter WebXR synchronously within the user gesture when VR is chosen, or Fullscreen on PC
-    if (targetPlatform === 'vr') {
+    // Enter WebXR AR for MyRoom, VR for Catch/Cricket, or Fullscreen on PC
+    if (game === 'myroom') {
+      void xrStore.enterAR().catch(() => {
+        useGameStore
+          .getState()
+          .setStatusBanner('Mixed Reality AR failed to open. Please grant room & camera permissions.')
+      })
+    } else if (targetPlatform === 'vr') {
       void xrStore.enterVR().catch(() => {
         useGameStore
           .getState()
@@ -96,33 +117,52 @@ export function LobbyOverlay() {
         <div className="lobby-header">
           <div>
             <h1 className="lobby-title">
-              {activeGame === 'cricket' ? 'VR Cricket Arena' : 'VR Catch Arena'}
+              {activeGame === 'cricket'
+                ? 'VR Cricket Arena'
+                : activeGame === 'myroom'
+                  ? 'MyRoom Mixed Reality'
+                  : 'VR Catch Arena'}
             </h1>
             <p className="lobby-subtitle">
-              Cross-platform Meta Quest WebXR &amp; PC Browser multiplayer with 3D spatial voice
+              {activeGame === 'myroom'
+                ? 'Meta Quest Mixed Reality • Scan room surfaces, sculpt Paper & Clay, and collaborate with upgraded 3D avatars'
+                : 'Cross-platform Meta Quest WebXR & PC Browser multiplayer with 3D spatial voice'}
             </p>
           </div>
-          <span className={`xr-pill ${xrSupported ? '' : 'muted'}`}>
-            {xrSupported ? 'WebXR / Quest Ready' : 'PC Browser Mode'}
+          <span className={`xr-pill ${(activeGame === 'myroom' ? arSupported : xrSupported) ? '' : 'muted'}`}>
+            {activeGame === 'myroom'
+              ? arSupported
+                ? 'Meta Quest / AR Ready'
+                : 'AR Device Only'
+              : xrSupported
+                ? 'WebXR / Quest Ready'
+                : 'PC Browser Mode'}
           </span>
         </div>
 
         <div className="field">
           <label>Select Game</label>
-          <div className="mode-pills" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+          <div className="mode-pills" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
             <button
               type="button"
               className={`mode-btn ${activeGame === 'catch' ? 'active' : ''}`}
               onClick={() => useGameStore.getState().setActiveGame('catch')}
             >
-              VR Catch Arena (2-3P Catch)
+              VR Catch Arena
             </button>
             <button
               type="button"
               className={`mode-btn ${activeGame === 'cricket' ? 'active' : ''}`}
               onClick={() => useGameStore.getState().setActiveGame('cricket')}
             >
-              VR Cricket (Batter vs Bowler vs Keeper)
+              VR Cricket
+            </button>
+            <button
+              type="button"
+              className={`mode-btn ${activeGame === 'myroom' ? 'active' : ''}`}
+              onClick={() => useGameStore.getState().setActiveGame('myroom')}
+            >
+              MyRoom (Quest AR)
             </button>
           </div>
         </div>
@@ -185,6 +225,69 @@ export function LobbyOverlay() {
                   {modeDescriptions[gameMode]}
                 </span>
               </div>
+            ) : activeGame === 'myroom' ? (
+              <>
+                <div className="field">
+                  <label>Your Avatar (Seen by Peers) &amp; Computer Opponent Model</label>
+                  <div className="mode-pills" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+                    <button
+                      type="button"
+                      className={`mode-btn ${avatarGender === 'male' ? 'active' : ''}`}
+                      onClick={() => useGameStore.getState().setAvatarGender('male')}
+                    >
+                      You: Male
+                    </button>
+                    <button
+                      type="button"
+                      className={`mode-btn ${avatarGender === 'female' ? 'active' : ''}`}
+                      onClick={() => useGameStore.getState().setAvatarGender('female')}
+                    >
+                      You: Female
+                    </button>
+                    <button
+                      type="button"
+                      className={`mode-btn ${aiAvatarGender === 'male' ? 'active' : ''}`}
+                      onClick={() => useGameStore.getState().setAiAvatarGender('male')}
+                    >
+                      AI: Male
+                    </button>
+                    <button
+                      type="button"
+                      className={`mode-btn ${aiAvatarGender === 'female' ? 'active' : ''}`}
+                      onClick={() => useGameStore.getState().setAiAvatarGender('female')}
+                    >
+                      AI: Female
+                    </button>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label>Room Opponent Mode</label>
+                  <div className="mode-pills">
+                    <button
+                      type="button"
+                      className={`mode-btn ${opponentMode === 'auto' ? 'active' : ''}`}
+                      onClick={() => useMyRoomStore.getState().setOpponentMode('auto')}
+                    >
+                      Auto (Peer / AI)
+                    </button>
+                    <button
+                      type="button"
+                      className={`mode-btn ${opponentMode === 'computer' ? 'active' : ''}`}
+                      onClick={() => useMyRoomStore.getState().setOpponentMode('computer')}
+                    >
+                      Computer AI
+                    </button>
+                    <button
+                      type="button"
+                      className={`mode-btn ${opponentMode === 'peer' ? 'active' : ''}`}
+                      onClick={() => useMyRoomStore.getState().setOpponentMode('peer')}
+                    >
+                      Peer Only
+                    </button>
+                  </div>
+                </div>
+              </>
             ) : (
               <>
                 <div className="field">
@@ -314,26 +417,38 @@ export function LobbyOverlay() {
         </div>
 
         <div className="actions-row">
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={joining}
-            onClick={() => startSession('pc')}
-          >
-            Join from PC Browser
-          </button>
+          {activeGame !== 'myroom' && (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={joining}
+              onClick={() => startSession('pc')}
+            >
+              Join from PC Browser
+            </button>
+          )}
           <button
             type="button"
             className="btn-primary vr"
-            disabled={joining || !xrSupported}
+            disabled={joining || (activeGame === 'myroom' ? !arSupported : !xrSupported)}
             title={
-              xrSupported
-                ? 'Launch immersive WebXR session on Meta Quest'
-                : 'Open on Meta Quest Browser (HTTPS) to enter VR'
+              activeGame === 'myroom'
+                ? arSupported
+                  ? 'Launch Meta Quest Mixed Reality AR session'
+                  : 'MyRoom Mixed Reality requires a Meta Quest or WebXR AR-supported browser'
+                : xrSupported
+                  ? 'Launch immersive WebXR session on Meta Quest'
+                  : 'Open on Meta Quest Browser (HTTPS) to enter VR'
             }
             onClick={() => startSession('vr')}
           >
-            {xrSupported ? 'Enter Meta Quest VR' : 'VR Headset Unavailable Here'}
+            {activeGame === 'myroom'
+              ? arSupported
+                ? 'Enter Mixed Reality (Quest AR)'
+                : 'Meta Quest / AR Device Required'
+              : xrSupported
+                ? 'Enter Meta Quest VR'
+                : 'VR Headset Unavailable Here'}
           </button>
         </div>
 
@@ -349,6 +464,19 @@ export function LobbyOverlay() {
                 <strong>PC Browser Cricket:</strong> <strong>WASD</strong> footwork, <strong>Left-Click</strong>{' '}
                 to swing bat (or hold to bowl at yellow pitch target), <strong>Right-Click / Space</strong>{' '}
                 to catch airborne balls.
+              </div>
+            </>
+          ) : activeGame === 'myroom' ? (
+            <>
+              <div>
+                <strong>Meta Quest Mixed Reality Only:</strong> Scans your real room tables, floor &amp; walls.
+                Use the AR Studio panel (<strong>B</strong> toggles hide/show) to spawn <strong>Paper</strong> &amp;{' '}
+                <strong>Artificial Clay</strong> objects onto real surfaces.
+              </div>
+              <div>
+                <strong>Palm Tracking Interaction:</strong> Pinch/grab to carry &amp; place, squeeze palm(s) tightly
+                to squash/sculpt clay or crumple paper, pull with both hands to tear pieces apart, and build
+                alongside upgraded Male/Female 3D opponents.
               </div>
             </>
           ) : (

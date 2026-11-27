@@ -1,6 +1,8 @@
 export type PlatformMode = 'vr' | 'pc'
 
-export type ActiveGame = 'catch' | 'cricket'
+export type ActiveGame = 'catch' | 'cricket' | 'myroom'
+
+export type AvatarGender = 'male' | 'female'
 
 export type GameMode = 'twin-thrower' | 'rally' | 'solo'
 
@@ -41,6 +43,7 @@ export interface PeerInfo {
   id: string
   name: string
   platform: PlatformMode
+  avatarGender?: AvatarGender
   role: PlayerRole
   slotIndex: number
   color: string

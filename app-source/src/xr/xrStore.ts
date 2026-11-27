@@ -12,6 +12,11 @@ export const xrStore = createXRStore({
     left: { model: false },
     right: { model: false },
   },
+  planeDetection: true,
+  meshDetection: true,
+  anchors: true,
+  hitTest: true,
+  handTracking: true,
   foveation: 0.5,
   frameRate: 'high',
   emulate: {

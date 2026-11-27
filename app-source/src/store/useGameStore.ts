@@ -4,6 +4,7 @@ import { useCricketStore } from '../cricket/useCricketStore'
 import {
   ActiveGame,
   AVATAR_COLORS,
+  AvatarGender,
   BallNetState,
   GameMode,
   getSpawnForSlot,
@@ -122,8 +123,12 @@ export interface GameStoreState {
   micEnabled: boolean
   micStatus: 'off' | 'connecting' | 'active' | 'denied' | 'unavailable'
   xrSupported: boolean
+  arSupported: boolean
   inXR: boolean
+  xrMode: 'immersive-vr' | 'immersive-ar' | 'inline' | null
   vrMenuVisible: boolean
+  avatarGender: AvatarGender
+  aiAvatarGender: AvatarGender
   pointerLocked: boolean
   throwCharge: number
   desktopCatchActive: boolean
@@ -141,9 +146,12 @@ export interface GameStoreState {
   setMicEnabled: (enabled: boolean) => void
   setMicStatus: (status: GameStoreState['micStatus']) => void
   setXrSupported: (supported: boolean) => void
-  setInXR: (inXR: boolean) => void
+  setArSupported: (supported: boolean) => void
+  setInXR: (inXR: boolean, mode?: 'immersive-vr' | 'immersive-ar' | 'inline' | null) => void
   setVrMenuVisible: (visible: boolean) => void
   toggleVrMenu: () => void
+  setAvatarGender: (gender: AvatarGender) => void
+  setAiAvatarGender: (gender: AvatarGender) => void
   setPointerLocked: (locked: boolean) => void
   setThrowCharge: (charge: number) => void
   setDesktopCatchActive: (active: boolean) => void
@@ -194,8 +202,12 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   micEnabled: true,
   micStatus: 'off',
   xrSupported: false,
+  arSupported: false,
   inXR: false,
+  xrMode: null,
   vrMenuVisible: true,
+  avatarGender: 'male',
+  aiAvatarGender: 'female',
   pointerLocked: false,
   throwCharge: 0,
   desktopCatchActive: false,
@@ -220,9 +232,18 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   setMicEnabled: (micEnabled) => set({ micEnabled }),
   setMicStatus: (micStatus) => set({ micStatus }),
   setXrSupported: (xrSupported) => set({ xrSupported }),
-  setInXR: (inXR) => set({ inXR, platform: inXR ? 'vr' : get().platform, vrMenuVisible: true }),
+  setArSupported: (arSupported) => set({ arSupported }),
+  setInXR: (inXR, xrMode = null) =>
+    set({
+      inXR,
+      xrMode,
+      platform: inXR ? 'vr' : get().platform,
+      vrMenuVisible: true,
+    }),
   setVrMenuVisible: (vrMenuVisible) => set({ vrMenuVisible }),
   toggleVrMenu: () => set((s) => ({ vrMenuVisible: !s.vrMenuVisible })),
+  setAvatarGender: (avatarGender) => set({ avatarGender }),
+  setAiAvatarGender: (aiAvatarGender) => set({ aiAvatarGender }),
   setPointerLocked: (pointerLocked) => set({ pointerLocked }),
   setThrowCharge: (throwCharge) => set({ throwCharge }),
   setDesktopCatchActive: (desktopCatchActive) => set({ desktopCatchActive }),
