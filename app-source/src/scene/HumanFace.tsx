@@ -77,6 +77,37 @@ function createSkinCanvasTexture(profile: AthleteLookProfile, gender: AvatarGend
     ctx.fill()
   }
 
+  // Subtle optical corneal specular highlight + rich natural skin gradient
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.needsUpdate = true
+  return tex
+}
+
+function createIrisCanvasTexture(eyeColor: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 128
+  canvas.height = 128
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = eyeColor
+  ctx.fillRect(0, 0, 128, 128)
+  // Dark outer limbal ring & radial iris fibers
+  const grad = ctx.createRadialGradient(64, 64, 10, 64, 64, 62)
+  grad.addColorStop(0, '#09090b')
+  grad.addColorStop(0.32, eyeColor)
+  grad.addColorStop(0.85, eyeColor)
+  grad.addColorStop(1, '#09090b')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, 128, 128)
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)'
+  ctx.lineWidth = 1.5
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * Math.PI * 2
+    ctx.beginPath()
+    ctx.moveTo(64 + Math.cos(a) * 18, 64 + Math.sin(a) * 18)
+    ctx.lineTo(64 + Math.cos(a) * 52, 64 + Math.sin(a) * 52)
+    ctx.stroke()
+  }
   const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
   tex.needsUpdate = true
@@ -106,9 +137,13 @@ export function HumanFaceHead({
   const blinkSeed = useMemo(() => Math.random() * 4.5, [])
 
   const skinTex = useMemo(() => createSkinCanvasTexture(profile, gender), [profile, gender])
+  const irisTex = useMemo(() => createIrisCanvasTexture(profile.eyeColor), [profile.eyeColor])
   useEffect(() => {
-    return () => skinTex.dispose()
-  }, [skinTex])
+    return () => {
+      skinTex.dispose()
+      irisTex.dispose()
+    }
+  }, [skinTex, irisTex])
 
   const isFemale = gender === 'female'
 
@@ -171,10 +206,14 @@ export function HumanFaceHead({
             <sphereGeometry args={[0.016, 12, 10]} />
             <meshStandardMaterial color="#f8fafc" roughness={0.25} />
           </mesh>
-          {/* Iris */}
-          <mesh position={[0, 0, -0.0075]} scale={[1, 1, 0.45]}>
-            <sphereGeometry args={[0.0085, 12, 10]} />
-            <meshStandardMaterial color={profile.eyeColor} roughness={0.14} metalness={0.08} />
+          {/* Radial-fiber Iris + specular cornea gleam */}
+          <mesh position={[0, 0, -0.0075]} scale={[1, 1, 0.48]}>
+            <sphereGeometry args={[0.0086, 14, 12]} />
+            <meshStandardMaterial map={irisTex} roughness={0.12} metalness={0.05} />
+          </mesh>
+          <mesh position={[-0.003, 0.003, -0.0112]}>
+            <sphereGeometry args={[0.0018, 6, 6]} />
+            <meshBasicMaterial color="#ffffff" />
           </mesh>
           {/* Pupil */}
           <mesh position={[0, 0, -0.01]} scale={[1, 1, 0.4]}>

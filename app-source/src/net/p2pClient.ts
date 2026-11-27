@@ -477,6 +477,7 @@ class P2PGameClient {
         existing.quat = [...incoming.quat]
         existing.vel = [...incoming.vel]
         existing.crumpleFactor = incoming.crumpleFactor
+        existing.foldFactor = incoming.foldFactor ?? existing.foldFactor
         existing.deformQ = [...incoming.deformQ]
         existing.timestamp = incoming.timestamp
         applyQuantizedDeform(existing.meshData, incoming.deformQ)
@@ -489,6 +490,7 @@ class P2PGameClient {
       existing.pos = [...deform.pos]
       existing.quat = [...deform.quat]
       existing.crumpleFactor = deform.crumpleFactor
+      existing.foldFactor = deform.foldFactor ?? existing.foldFactor
       existing.deformQ = [...deform.deformQ]
       existing.timestamp = deform.timestamp
       applyQuantizedDeform(existing.meshData, deform.deformQ)

@@ -2,7 +2,15 @@ import * as THREE from 'three'
 import { runtimeState } from '../store/useGameStore'
 import { computeTearSplitDeforms, encodeDeformOffsets, squeezeCraftWithPalm } from './craftEngine'
 import { clampInsideRoomWalls, findSupportingSurfaceY } from './roomPhysics'
-import { CLAY_COLORS, CraftShapePreset, MAX_ROOM_CRAFT_OBJECTS, PAPER_COLORS, RoomSurfaceCollider } from './types'
+import {
+  CLOTH_COLORS,
+  CLAY_COLORS,
+  CraftMaterialKind,
+  CraftShapePreset,
+  MAX_ROOM_CRAFT_OBJECTS,
+  PAPER_COLORS,
+  RoomSurfaceCollider,
+} from './types'
 import {
   deleteRuntimeCraftObject,
   MyRoomAIRuntime,
@@ -192,6 +200,20 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   if (_userFwd.lengthSq() < 1e-4) _userFwd.set(0, 0, -1)
   _userFwd.normalize()
 
+  // Initial spawn right nearest to user (1.0m in front, clear of obstacles & inside walls!)
+  const faceUserYaw = Math.atan2(-(userHead[0] - ai.pos[0]), -(userHead[2] - ai.pos[2]))
+  if (!ai.initializedNearUser) {
+    let initX = userHead[0] + _userFwd.x * 0.98
+    let initZ = userHead[2] + _userFwd.z * 0.98
+    ;[initX, initZ] = steerClearOfFurniture(initX, initZ, surfaces, floorY)
+    ;[initX, initZ] = clampInsideRoomWalls(initX, initZ, 0.44, surfaces, bounds)
+    ai.pos[0] = initX
+    ai.pos[1] = floorY
+    ai.pos[2] = initZ
+    ai.yaw = Math.atan2(-(userHead[0] - initX), -(userHead[2] - initZ))
+    ai.initializedNearUser = true
+  }
+
   // 1. Match user's posture: take SITTING position if user is seated (<1.32m above floor), else STANDING
   const userEyeRelY = userHead[1] - floorY
   const targetSit = userEyeRelY < 1.32 ? 1 : 0
@@ -199,7 +221,7 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   ai.pos[1] = floorY
 
   // 2. Check if user handed/offered or placed an uncollected object nearby to see & collect
-  if (!ai.holdingObjId && !ai.targetObjId) {
+  if (!ai.holdingObjId && !ai.targetObjId && !ai.pullToUserActive) {
     let bestGiftId: string | null = null
     let bestGiftDist = Infinity
     myRoomRuntime.objects.forEach((obj) => {
@@ -210,7 +232,6 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
         obj.pos[1] - (ai.leftHand[1] + ai.rightHand[1]) * 0.5,
         obj.pos[2] - (ai.leftHand[2] + ai.rightHand[2]) * 0.5
       )
-      // User offered directly near AI's hands OR placed a gift in the room (< 2.2m)
       if ((obj.isHeldByLocal && dToHands < 0.65) || (!obj.isHeldByLocal && obj.ownerId === null && dToAi < 2.4)) {
         if (dToAi < bestGiftDist) {
           bestGiftDist = dToAi
@@ -228,17 +249,16 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   const userInteractingWithBody =
     ai.heldHandByUser !== null || ai.hairPullTarget !== null || ai.touchedShoulderSide !== null
 
-  // 3. Determine navigation target cleanly inside walls and around furniture (tables/couches)
-  let goalX = userHead[0] + _userFwd.x * 1.28
-  let goalZ = userHead[2] + _userFwd.z * 1.28
+  // 3. Determine navigation target cleanly inside walls & furniture (pull-to-me swiftly brings AI closest to user!)
+  let goalX = userHead[0] + _userFwd.x * (ai.pullToUserActive ? 0.92 : 1.02)
+  let goalZ = userHead[2] + _userFwd.z * (ai.pullToUserActive ? 0.92 : 1.02)
 
   const giftObj = ai.targetObjId ? myRoomRuntime.objects.get(ai.targetObjId) : null
-  if (giftObj && ai.actionMode === 'collect') {
+  if (!ai.pullToUserActive && giftObj && ai.actionMode === 'collect') {
     ai.lookTarget = [...giftObj.pos]
     const dirX = ai.pos[0] - giftObj.pos[0]
     const dirZ = ai.pos[2] - giftObj.pos[2]
     const dLen = Math.hypot(dirX, dirZ) || 1
-    // Stand/reach politely ~0.48m back from target object / table edge
     goalX = giftObj.pos[0] + (dirX / dLen) * 0.48
     goalZ = giftObj.pos[2] + (dirZ / dLen) * 0.48
   } else {
@@ -252,9 +272,24 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   const dz = goalZ - ai.pos[2]
   const distToGoal = Math.hypot(dx, dz)
 
-  // Always face the user cleanly unless holding/turning slightly for collection
-  const faceUserYaw = Math.atan2(-(userHead[0] - ai.pos[0]), -(userHead[2] - ai.pos[2]))
-  if (userInteractingWithBody || distToGoal < 0.24 || ai.sitBlend > 0.65) {
+  if (ai.pullToUserActive) {
+    const distToUser = Math.hypot(userHead[0] - ai.pos[0], userHead[2] - ai.pos[2])
+    if (distToUser <= 1.08 || distToGoal < 0.22) {
+      ai.pullToUserActive = false
+      ai.isWalking = false
+    } else {
+      const pullStep = Math.min(distToGoal, 2.35 * cDt)
+      let nextX = ai.pos[0] + (dx / distToGoal) * pullStep
+      let nextZ = ai.pos[2] + (dz / distToGoal) * pullStep
+      ;[nextX, nextZ] = steerClearOfFurniture(nextX, nextZ, surfaces, floorY)
+      ;[nextX, nextZ] = clampInsideRoomWalls(nextX, nextZ, 0.44, surfaces, bounds)
+      ai.pos[0] = nextX
+      ai.pos[2] = nextZ
+      ai.isWalking = true
+      ai.walkPhase += cDt * 8.5
+    }
+    ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 8.0)
+  } else if (userInteractingWithBody || distToGoal < 0.24 || ai.sitBlend > 0.65) {
     ai.isWalking = false
     ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 6.5)
   } else {
@@ -416,21 +451,29 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     ai.actionTimerSec = 1.2
   }
 
-  // 6. State transitions (create own objects, squeeze, place neatly beside self)
+  // 6. State transitions (create Clay, Paper & Cloth objects, squeeze, place neatly beside self)
   ai.actionTimerSec -= cDt
-  if (ai.actionTimerSec <= 0 && !userInteractingWithBody) {
+  if (ai.actionTimerSec <= 0 && !userInteractingWithBody && !ai.pullToUserActive) {
     if (ai.actionMode === 'idle' || ai.actionMode === 'walk') {
       if (myRoomRuntime.objects.size < MAX_ROOM_CRAFT_OBJECTS - 3) {
-        const usePaper = Math.random() < 0.45
-        const kind = usePaper ? 'paper' : 'clay'
-        const preset: CraftShapePreset = usePaper
-          ? 'sheet'
-          : Math.random() < 0.5
-            ? 'sphere'
-            : 'cylinder'
-        const color = usePaper
-          ? PAPER_COLORS[Math.floor(Math.random() * PAPER_COLORS.length)]
-          : CLAY_COLORS[Math.floor(Math.random() * CLAY_COLORS.length)]
+        const roll = Math.random()
+        const kind: CraftMaterialKind = roll < 0.38 ? 'clay' : roll < 0.72 ? 'paper' : 'cloth'
+        const preset: CraftShapePreset =
+          kind === 'paper'
+            ? 'sheet'
+            : kind === 'cloth'
+              ? Math.random() < 0.5
+                ? 'towel'
+                : 'sheet'
+              : Math.random() < 0.5
+                ? 'sphere'
+                : 'cylinder'
+        const color =
+          kind === 'paper'
+            ? PAPER_COLORS[Math.floor(Math.random() * PAPER_COLORS.length)]
+            : kind === 'cloth'
+              ? CLOTH_COLORS[Math.floor(Math.random() * CLOTH_COLORS.length)]
+              : CLAY_COLORS[Math.floor(Math.random() * CLAY_COLORS.length)]
 
         const created = spawnRuntimeCraftObject({
           ownerId: 'ai',

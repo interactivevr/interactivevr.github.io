@@ -1,11 +1,14 @@
-import { RoomSurfaceCollider } from './types'
+import { CraftMaterialKind, MATERIAL_PHYSICS, RoomSurfaceCollider } from './types'
 
-const GRAVITY = -6.4
+const BASE_GRAVITY = -9.81
 
 export interface CraftPhysicsTarget {
   pos: [number, number, number]
   vel: [number, number, number]
-  kind: 'clay' | 'paper'
+  kind: CraftMaterialKind
+  crumpleFactor?: number
+  foldFactor?: number
+  seed?: number
   approxRadius: number
 }
 
@@ -90,21 +93,38 @@ export function stepCraftObjectPhysics(
   dt: number
 ): boolean {
   const cDt = Math.min(dt, 0.04)
+  const spec = MATERIAL_PHYSICS[obj.kind]
   const r = Math.max(0.038, obj.approxRadius * 0.72)
 
-  const airDamp = obj.kind === 'paper' ? Math.max(0, 1 - 2.6 * cDt) : Math.max(0, 1 - 0.85 * cDt)
-  const gravScale = obj.kind === 'paper' ? 0.55 : 1.0
+  // Compacting (crumpling/folding) Paper or Cloth reduces air resistance smoothly like the real world
+  const compact01 = Math.max(obj.crumpleFactor ?? 0, (obj.foldFactor ?? 0) * 0.75)
+  const effectiveDrag =
+    spec.airDragFlat * (1 - compact01) + spec.airDragCompact * compact01
+  const effGravity =
+    BASE_GRAVITY * (spec.gravityScale * (1 - compact01 * 0.4) + compact01 * 0.45)
 
-  obj.vel[0] *= airDamp
-  obj.vel[2] *= airDamp
-  obj.vel[1] = obj.vel[1] * airDamp + GRAVITY * gravScale * cDt
+  const horizDamp = Math.max(0, 1 - effectiveDrag * cDt)
+  const vertDamp = Math.max(0, 1 - effectiveDrag * 0.85 * cDt)
+
+  obj.vel[0] *= horizDamp
+  obj.vel[2] *= horizDamp
+  obj.vel[1] = obj.vel[1] * vertDamp + effGravity * cDt
+
+  // Leaf-like lateral air flutter for flat Paper / light Cloth while falling in mid-air
+  if (spec.flutterAmp > 0 && Math.abs(obj.vel[1]) > 0.25) {
+    const phase = (obj.seed ?? 1) * 3.1 + obj.pos[1] * 14
+    const flutterScale = spec.flutterAmp * (1 - compact01 * 0.85)
+    obj.vel[0] += Math.sin(phase) * flutterScale * cDt * 3.5
+    obj.vel[2] += Math.cos(phase * 0.8) * flutterScale * cDt * 3.5
+  }
 
   obj.pos[0] += obj.vel[0] * cDt
   obj.pos[1] += obj.vel[1] * cDt
   obj.pos[2] += obj.vel[2] * cDt
 
   let touchedSurface = false
-  const restitution = obj.kind === 'clay' ? 0.14 : 0.05
+  const restitution = spec.restitution
+  const slideKeep = Math.max(0.35, 1 - spec.friction * 0.75)
 
   // 1. Resolve ALL scanned horizontal surfaces (tables, desks, couches, shelves, floor)
   for (let i = 0; i < surfaces.length; i++) {
@@ -136,8 +156,8 @@ export function stepCraftObjectPhysics(
           } else {
             obj.vel[1] = 0
           }
-          obj.vel[0] *= 0.72
-          obj.vel[2] *= 0.72
+          obj.vel[0] *= slideKeep
+          obj.vel[2] *= slideKeep
           touchedSurface = true
         }
       }
@@ -189,8 +209,8 @@ export function stepCraftObjectPhysics(
     } else {
       obj.vel[1] = 0
     }
-    obj.vel[0] *= 0.72
-    obj.vel[2] *= 0.72
+    obj.vel[0] *= slideKeep
+    obj.vel[2] *= slideKeep
     touchedSurface = true
   }
 

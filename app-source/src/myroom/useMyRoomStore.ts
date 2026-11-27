@@ -1,22 +1,22 @@
 import { create } from 'zustand'
 import { createCraftMeshData, encodeDeformOffsets, RuntimeCraftMeshData } from './craftEngine'
 import {
-  CLAY_COLORS,
   ClayShapePreset,
   CraftDeformNetPayload,
   CraftMaterialKind,
   CraftObjectNetState,
   CraftShapePreset,
+  getDefaultColorForKind,
   MAX_ROOM_CRAFT_OBJECTS,
   MyRoomOpponentMode,
   MyRoomToolMode,
-  PAPER_COLORS,
   PaperShapePreset,
   RoomSurfaceCollider,
 } from './types'
 
 export interface RuntimeCraftObject extends CraftObjectNetState {
   meshData: RuntimeCraftMeshData
+  foldFactor: number
   dirtyNetwork: boolean
   isHeldByLocal: boolean
 }
@@ -24,6 +24,8 @@ export interface RuntimeCraftObject extends CraftObjectNetState {
 export interface MyRoomAIRuntime {
   pos: [number, number, number]
   yaw: number
+  initializedNearUser: boolean
+  pullToUserActive: boolean
   sitBlend: number // 0 = standing, 1 = seated posture matching user
   isWalking: boolean
   walkPhase: number
@@ -54,8 +56,10 @@ export const myRoomRuntime = {
   floorY: 0,
   roomBoundsXZ: { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 },
   ai: {
-    pos: [0, 0, -1.25] as [number, number, number],
+    pos: [0, 0, -0.95] as [number, number, number],
     yaw: 0,
+    initializedNearUser: false,
+    pullToUserActive: false,
     sitBlend: 0,
     isWalking: false,
     walkPhase: 0,
@@ -103,6 +107,7 @@ export function spawnRuntimeCraftObject(opts: {
   vel?: [number, number, number]
   scale?: number
   crumpleFactor?: number
+  foldFactor?: number
   tearGeneration?: number
   deformQ?: number[]
   deformSeed?: number
@@ -139,6 +144,7 @@ export function spawnRuntimeCraftObject(opts: {
     vel: opts.vel ? [...opts.vel] : [0, 0.05, 0],
     scale,
     crumpleFactor: opts.crumpleFactor ?? 0,
+    foldFactor: opts.foldFactor ?? 0,
     tearGeneration: opts.tearGeneration ?? 0,
     deformQ,
     deformSeed,
@@ -193,6 +199,7 @@ export function stripToNetState(obj: RuntimeCraftObject): CraftObjectNetState {
     vel: [...obj.vel],
     scale: obj.scale,
     crumpleFactor: obj.crumpleFactor,
+    foldFactor: obj.foldFactor,
     tearGeneration: obj.tearGeneration,
     deformQ: [...obj.deformQ],
     deformSeed: obj.deformSeed,
@@ -230,7 +237,7 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
   selectedKind: 'clay',
   selectedClayPreset: 'sphere',
   selectedPaperPreset: 'sheet',
-  selectedColor: CLAY_COLORS[0],
+  selectedColor: getDefaultColorForKind('clay'),
   toolMode: 'sculpt-grab',
   opponentMode: 'auto',
   showRoomMesh: false,
@@ -242,7 +249,7 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
   setSelectedKind: (selectedKind) =>
     set({
       selectedKind,
-      selectedColor: selectedKind === 'clay' ? CLAY_COLORS[0] : PAPER_COLORS[0],
+      selectedColor: getDefaultColorForKind(selectedKind),
     }),
   setSelectedClayPreset: (selectedClayPreset) => set({ selectedClayPreset }),
   setSelectedPaperPreset: (selectedPaperPreset) => set({ selectedPaperPreset }),
@@ -263,6 +270,8 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
     myRoomRuntime.floorY = 0
     myRoomRuntime.roomBoundsXZ = { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 }
     myRoomRuntime.ai.holdingObjId = null
+    myRoomRuntime.ai.initializedNearUser = false
+    myRoomRuntime.ai.pullToUserActive = false
     myRoomRuntime.ai.collectedIds = []
     myRoomRuntime.ai.targetObjId = null
     myRoomRuntime.ai.hairPullTarget = null

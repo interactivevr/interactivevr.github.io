@@ -3,9 +3,10 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { runtimeState } from '../store/useGameStore'
 import { findSupportingSurfaceY, stepCraftObjectPhysics } from './roomPhysics'
+import { CraftMaterialKind } from './types'
 import { myRoomRuntime, RuntimeCraftObject, useMyRoomStore } from './useMyRoomStore'
 
-function createMaterialTexture(kind: 'clay' | 'paper'): THREE.CanvasTexture {
+function createMaterialTexture(kind: CraftMaterialKind): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
   canvas.width = 256
   canvas.height = 256
@@ -26,11 +27,41 @@ function createMaterialTexture(kind: 'clay' | 'paper'): THREE.CanvasTexture {
       ctx.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len)
       ctx.stroke()
     }
-    // Crisp subtle page border so white paper stands out over light desks/floors in AR
     ctx.strokeStyle = 'rgba(100, 116, 139, 0.35)'
     ctx.lineWidth = 4
     ctx.strokeRect(2, 2, 252, 252)
+  } else if (kind === 'cloth') {
+    // Crisp linen weave & decorative border threads
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.14)'
+    for (let y = 0; y < 256; y += 6) {
+      ctx.fillRect(0, y, 256, 2)
+    }
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.14)'
+    for (let x = 0; x < 256; x += 6) {
+      ctx.fillRect(x, 0, 2, 256)
+    }
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)'
+    ctx.lineWidth = 6
+    ctx.strokeRect(8, 8, 240, 240)
+  } else if (kind === 'wood') {
+    // Natural organic wood grain lines & knots
+    for (let y = 0; y < 256; y += 3) {
+      const wave = Math.sin(y * 0.08) * 14
+      ctx.strokeStyle = y % 6 === 0 ? 'rgba(62, 32, 12, 0.28)' : 'rgba(92, 52, 24, 0.14)'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.bezierCurveTo(85, y + wave, 170, y - wave, 256, y)
+      ctx.stroke()
+    }
+  } else if (kind === 'metal') {
+    // Brushed metallic sheen striations
+    for (let y = 0; y < 256; y += 2) {
+      ctx.fillStyle = y % 4 === 0 ? 'rgba(255, 255, 255, 0.18)' : 'rgba(15, 23, 42, 0.12)'
+      ctx.fillRect(0, y, 256, 1)
+    }
   } else {
+    // Matte polymer/modeling clay micro-dimples
     for (let i = 0; i < 240; i++) {
       const x = (i * 53) % 256
       const y = (i * 97) % 256
@@ -51,22 +82,14 @@ function createMaterialTexture(kind: 'clay' | 'paper'): THREE.CanvasTexture {
 
 function SingleCraftObjectView({
   obj,
-  clayTex,
-  paperTex,
+  textures,
 }: {
   obj: RuntimeCraftObject
-  clayTex: THREE.CanvasTexture
-  paperTex: THREE.CanvasTexture
+  textures: Record<CraftMaterialKind, THREE.CanvasTexture>
 }) {
   const meshRef = useRef<THREE.Mesh>(null)
   const matRef = useRef<THREE.MeshStandardMaterial>(null)
   const shadowRef = useRef<THREE.Mesh>(null)
-
-  useEffect(() => {
-    return () => {
-      // Geometry disposal is managed when deleted in deleteRuntimeCraftObject
-    }
-  }, [obj.id])
 
   useFrame((_, delta) => {
     const live = myRoomRuntime.objects.get(obj.id)
@@ -78,6 +101,9 @@ function SingleCraftObjectView({
           pos: live.pos,
           vel: live.vel,
           kind: live.kind,
+          crumpleFactor: live.crumpleFactor,
+          foldFactor: live.foldFactor ?? 0,
+          seed: live.deformSeed,
           approxRadius: live.meshData.approxRadius,
         },
         myRoomRuntime.surfaces,
@@ -90,16 +116,14 @@ function SingleCraftObjectView({
     meshRef.current.position.set(live.pos[0], live.pos[1], live.pos[2])
     meshRef.current.quaternion.set(live.quat[0], live.quat[1], live.quat[2], live.quat[3])
 
-    // Highlight subtly when near either local hand for effortless bare-hand grabbing in AR
     if (matRef.current) {
       const lp = runtimeState.localPose
       const dl = Math.hypot(live.pos[0] - lp.leftPos[0], live.pos[1] - lp.leftPos[1], live.pos[2] - lp.leftPos[2])
       const dr = Math.hypot(live.pos[0] - lp.rightPos[0], live.pos[1] - lp.rightPos[1], live.pos[2] - lp.rightPos[2])
       const nearHand = Math.min(dl, dr) < live.meshData.approxRadius + 0.17
-      matRef.current.emissiveIntensity = live.isHeldByLocal ? 0.32 : nearHand ? 0.28 : 0.14
+      matRef.current.emissiveIntensity = live.isHeldByLocal ? 0.3 : nearHand ? 0.24 : 0.1
     }
 
-    // Contact shadow on nearest supporting table/desk/floor directly underneath object
     if (shadowRef.current) {
       const surf = findSupportingSurfaceY(
         live.pos[0],
@@ -115,7 +139,18 @@ function SingleCraftObjectView({
     }
   })
 
-  const isPaper = obj.kind === 'paper'
+  const doubleSided = obj.kind === 'paper' || obj.kind === 'cloth'
+  const roughness =
+    obj.kind === 'metal'
+      ? 0.24
+      : obj.kind === 'wood'
+        ? 0.62
+        : obj.kind === 'cloth'
+          ? 0.92
+          : obj.kind === 'paper'
+            ? 0.78
+            : 0.54
+  const metalness = obj.kind === 'metal' ? 0.86 : 0.04
 
   return (
     <group>
@@ -124,11 +159,11 @@ function SingleCraftObjectView({
           ref={matRef}
           color={obj.color}
           emissive={obj.color}
-          emissiveIntensity={0.14}
-          map={isPaper ? paperTex : clayTex}
-          roughness={isPaper ? 0.72 : 0.52}
-          metalness={0.04}
-          side={isPaper ? THREE.DoubleSide : THREE.FrontSide}
+          emissiveIntensity={0.1}
+          map={textures[obj.kind]}
+          roughness={roughness}
+          metalness={metalness}
+          side={doubleSided ? THREE.DoubleSide : THREE.FrontSide}
         />
       </mesh>
       <mesh ref={shadowRef} rotation={[-Math.PI / 2, 0, 0]}>
@@ -142,17 +177,23 @@ function SingleCraftObjectView({
 export function CraftObjectsLayer() {
   useMyRoomStore((s) => s.objectListVersion)
 
-  const clayTex = useMemo(() => createMaterialTexture('clay'), [])
-  const paperTex = useMemo(() => createMaterialTexture('paper'), [])
+  const textures = useMemo<Record<CraftMaterialKind, THREE.CanvasTexture>>(
+    () => ({
+      clay: createMaterialTexture('clay'),
+      paper: createMaterialTexture('paper'),
+      cloth: createMaterialTexture('cloth'),
+      wood: createMaterialTexture('wood'),
+      metal: createMaterialTexture('metal'),
+    }),
+    []
+  )
 
   useEffect(() => {
     return () => {
-      clayTex.dispose()
-      paperTex.dispose()
+      Object.values(textures).forEach((tex) => tex.dispose())
     }
-  }, [clayTex, paperTex])
+  }, [textures])
 
-  // Keep unheld objects from overlapping/clipping into each other when resting on tables/floor
   useFrame((_, delta) => {
     const objs = Array.from(myRoomRuntime.objects.values())
     const len = objs.length
@@ -187,12 +228,7 @@ export function CraftObjectsLayer() {
   return (
     <group>
       {objectList.map((obj) => (
-        <SingleCraftObjectView
-          key={obj.id}
-          obj={obj}
-          clayTex={clayTex}
-          paperTex={paperTex}
-        />
+        <SingleCraftObjectView key={obj.id} obj={obj} textures={textures} />
       ))}
     </group>
   )

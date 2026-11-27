@@ -14,7 +14,13 @@ import { stepMyRoomAI } from './myroomAI'
 import { raycastRoomPlacementPoint } from './roomPhysics'
 import { RealisticHumanAvatar } from './RealisticHumanAvatar'
 import { RoomScanner } from './RoomScanner'
-import { CLAY_COLORS, PAPER_COLORS } from './types'
+import {
+  CraftMaterialKind,
+  CraftShapePreset,
+  getAllPaletteColors,
+  getDefaultColorForKind,
+  MATERIAL_PHYSICS,
+} from './types'
 import { clearAllMyRoomObjects, myRoomRuntime, spawnRuntimeCraftObject, useMyRoomStore } from './useMyRoomStore'
 
 const _targetVec = new THREE.Vector3()
@@ -226,7 +232,7 @@ function InARCraftStudioPanel() {
 
   if (!vrMenuVisible) return null
 
-  const spawnInRoom = (kind: 'clay' | 'paper', preset: 'sphere' | 'cylinder' | 'sheet') => {
+  const spawnInRoom = (kind: CraftMaterialKind, preset: CraftShapePreset) => {
     camera.getWorldPosition(_rayOrigin)
     camera.getWorldDirection(_rayDir)
     const placePos = raycastRoomPlacementPoint(
@@ -236,14 +242,8 @@ function InARCraftStudioPanel() {
       myRoomRuntime.floorY,
       1.15
     )
-    const color =
-      kind === 'clay'
-        ? CLAY_COLORS.includes(selectedColor as (typeof CLAY_COLORS)[number])
-          ? selectedColor
-          : CLAY_COLORS[0]
-        : PAPER_COLORS.includes(selectedColor as (typeof PAPER_COLORS)[number])
-          ? selectedColor
-          : PAPER_COLORS[0]
+    const color = getDefaultColorForKind(kind)
+    const spec = MATERIAL_PHYSICS[kind]
 
     spawnRuntimeCraftObject({
       ownerId: null,
@@ -256,69 +256,100 @@ function InARCraftStudioPanel() {
     })
     useMyRoomStore
       .getState()
-      .setStatusHint(`Created ${kind.toUpperCase()} (${preset})! Squeeze palms or pull apart to tear.`)
+      .setStatusHint(
+        `${spec.label} (${spec.massKg}kg): ${
+          spec.canSqueeze
+            ? spec.canFold
+              ? 'Squeeze, Fold, or Tear with palms!'
+              : 'Squeeze or Tear with palms!'
+            : 'Heavy solid — cannot squeeze or tear!'
+        }`
+      )
   }
 
   return (
     <group position={panelPoseRef.current.pos} rotation={[0, panelPoseRef.current.yaw, 0]}>
       <mesh>
-        <boxGeometry args={[0.96, 0.72, 0.025]} />
-        <meshStandardMaterial color="#0b1220" transparent opacity={0.9} roughness={0.5} />
+        <boxGeometry args={[1.04, 0.88, 0.025]} />
+        <meshStandardMaterial color="#0b1220" transparent opacity={0.92} roughness={0.5} />
       </mesh>
-      <TextLabel position={[0, 0.3, 0.018]} fontSize={0.032} color="#38bdf8">
+      <TextLabel position={[0, 0.37, 0.018]} fontSize={0.032} color="#38bdf8">
         {`MYROOM MR STUDIO  •  SURFACES: ${scannedCount}  •  OBJECTS: ${objectCount}  •  [B] HIDE`}
       </TextLabel>
-      <TextLabel position={[0, 0.24, 0.018]} fontSize={0.021} color="#fde047">
-        {statusHint || 'Pinch/Grab to Place • Squeeze Palm to Shape • Pull Two Hands to Tear'}
+      <TextLabel position={[0, 0.31, 0.018]} fontSize={0.021} color="#fde047">
+        {statusHint || 'Pinch to Carry • Close Fist / Two Palms to Squeeze or Fold • Pull Apart to Tear'}
       </TextLabel>
 
-      {/* Row 1: Create Clay & Paper Objects */}
+      {/* Row 1: Squeezeable / Foldable Craft Materials */}
       <ARStudioButton
-        position={[-0.3, 0.14, 0.016]}
-        label="+ CLAY LUMP"
+        position={[-0.31, 0.21, 0.016]}
+        label="+ CLAY (0.7kg)"
         color="#c2410c"
         onClick={() => spawnInRoom('clay', 'sphere')}
       />
       <ARStudioButton
-        position={[0, 0.14, 0.016]}
-        label="+ CLAY ROLL"
-        color="#b45309"
-        onClick={() => spawnInRoom('clay', 'cylinder')}
-      />
-      <ARStudioButton
-        position={[0.3, 0.14, 0.016]}
-        label="+ PAPER SHEET"
+        position={[0, 0.21, 0.016]}
+        label="+ PAPER (15g)"
         color="#0284c7"
         onClick={() => spawnInRoom('paper', 'sheet')}
       />
-
-      {/* Row 2: Color, Room Scan Wireframe, Opponent Mode */}
       <ARStudioButton
-        position={[-0.3, 0.03, 0.016]}
+        position={[0.31, 0.21, 0.016]}
+        label="+ CLOTH (0.2kg)"
+        color="#dc2626"
+        onClick={() => spawnInRoom('cloth', 'towel')}
+      />
+
+      {/* Row 2: Heavy Rigid Materials (No Squeeze) & Companion Pull */}
+      <ARStudioButton
+        position={[-0.31, 0.1, 0.016]}
+        label="+ WOOD (1.5kg)"
+        color="#92400e"
+        onClick={() => spawnInRoom('wood', 'block')}
+      />
+      <ARStudioButton
+        position={[0, 0.1, 0.016]}
+        label="+ METAL (3.4kg)"
+        color="#475569"
+        onClick={() => spawnInRoom('metal', 'block')}
+      />
+      <ARStudioButton
+        position={[0.31, 0.1, 0.016]}
+        label="PULL NEAR ME"
+        color="#0d9488"
+        onClick={() => {
+          myRoomRuntime.ai.pullToUserActive = true
+          useMyRoomStore.getState().setStatusHint('Pulling companion back nearest to you!')
+        }}
+      />
+
+      {/* Row 3: Color, Room Scan Wireframe, Opponent Gender */}
+      <ARStudioButton
+        position={[-0.31, -0.01, 0.016]}
         label="NEXT COLOR"
         color={selectedColor}
         onClick={() => {
-          const all: string[] = [...CLAY_COLORS, ...PAPER_COLORS]
+          const all = getAllPaletteColors()
           const next = all[(all.indexOf(selectedColor) + 1) % all.length]
           useMyRoomStore.getState().setSelectedColor(next)
         }}
       />
       <ARStudioButton
-        position={[0, 0.03, 0.016]}
+        position={[0, -0.01, 0.016]}
         label={showRoomMesh ? 'ROOM SCAN: ON' : 'ROOM SCAN: OFF'}
         color={showRoomMesh ? '#059669' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowRoomMesh(!showRoomMesh)}
       />
       <ARStudioButton
-        position={[0.3, 0.03, 0.016]}
+        position={[0.31, -0.01, 0.016]}
         label={`AI: ${aiGender.toUpperCase()}`}
         color="#db2777"
         onClick={() => useGameStore.getState().setAiAvatarGender(aiGender === 'male' ? 'female' : 'male')}
       />
 
-      {/* Row 3: Opponent Mode, Clear Mine, Mic */}
+      {/* Row 4: Opponent Mode, Clear Mine, Mic */}
       <ARStudioButton
-        position={[-0.3, -0.08, 0.016]}
+        position={[-0.31, -0.12, 0.016]}
         label={`MODE: ${opponentMode.toUpperCase()}`}
         color="#6366f1"
         onClick={() => {
@@ -327,13 +358,13 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0, -0.08, 0.016]}
+        position={[0, -0.12, 0.016]}
         label="CLEAR MINE"
         color="#d97706"
         onClick={() => clearAllMyRoomObjects(localPeerId || 'local')}
       />
       <ARStudioButton
-        position={[0.3, -0.08, 0.016]}
+        position={[0.31, -0.12, 0.016]}
         label={micEnabled ? 'MIC: ON' : 'MIC: MUTED'}
         color={micEnabled ? '#059669' : '#dc2626'}
         onClick={() => {
@@ -342,9 +373,9 @@ function InARCraftStudioPanel() {
         }}
       />
 
-      {/* Row 4: Main Lobby & Exit AR */}
+      {/* Row 5: Main Lobby & Exit AR */}
       <ARStudioButton
-        position={[-0.17, -0.22, 0.016]}
+        position={[-0.18, -0.25, 0.016]}
         width={0.36}
         label="MAIN LOBBY"
         color="#7c3aed"
@@ -355,7 +386,7 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.17, -0.22, 0.016]}
+        position={[0.18, -0.25, 0.016]}
         width={0.36}
         label="EXIT AR"
         color="#b91c1c"

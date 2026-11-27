@@ -7,6 +7,7 @@ import {
 } from '@react-three/xr'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
+import { playMaterialActionSfx } from '../audio/myroomSfx'
 import { playThrowSfx } from '../audio/sfx'
 import { voiceAudio } from '../net/voiceAudio'
 import { analyzeXRHandFrame, XR_HAND_JOINTS } from '../physics/handGesture'
@@ -18,8 +19,10 @@ import { isXRControllerButtonPressed, pulseXRControllerHaptics } from '../xr/con
 import {
   computeTearSplitDeforms,
   encodeDeformOffsets,
+  foldCraftWithHands,
   squeezeCraftWithPalm,
 } from './craftEngine'
+import { MATERIAL_PHYSICS } from './types'
 import {
   deleteRuntimeCraftObject,
   myRoomRuntime,
@@ -155,8 +158,10 @@ export function MyRoomARRig() {
           sq > 0.5 ||
           tr > 0.5 ||
           handSelectRef.current[side]
-        const squeezeVal = Math.max(sq, isGrabbing ? 0.85 : 0.1)
-        curls = [squeezeVal * 0.75, tr, squeezeVal, squeezeVal, squeezeVal]
+        // Trigger = carry gently; Squeeze/Grip button (or Grip+Trigger) = firm squeeze intensity!
+        const gripSqueeze = ctrl.gamepad['xr-standard-squeeze']?.state === 'pressed' ? 0.92 : sq
+        const squeezeVal = Math.max(gripSqueeze, (tr > 0.5 && sq > 0.4) ? 0.95 : isGrabbing ? 0.35 : 0.08)
+        curls = [squeezeVal * 0.85, tr, gripSqueeze, gripSqueeze, gripSqueeze]
       } else if (hand?.inputSource.hand && frame && refSpace) {
         activeInput = hand.inputSource
         const analysis = analyzeXRHandFrame(
@@ -180,7 +185,7 @@ export function MyRoomARRig() {
 
       grabStateRef.current[side] = isGrabbing
 
-      // Inward palm vector pointing out of palm into held clay/paper
+      // Inward palm vector pointing out of palm into held clay/paper/cloth
       _objQuat.set(quatArr[0], quatArr[1], quatArr[2], quatArr[3])
       if (ctrl?.object) {
         _palmNormal.set(side === 'right' ? -1 : 1, 0, 0).applyQuaternion(_objQuat).normalize()
@@ -189,9 +194,11 @@ export function MyRoomARRig() {
       }
       const palmNormal: [number, number, number] = [_palmNormal.x, _palmNormal.y, _palmNormal.z]
 
-      // Full-hand fist closure strength vs gentle pinch carry
-      const fingerAvg = (curls[1] + curls[2] + curls[3]) / 3
-      const palmSqueezeStrength = fingerAvg * 0.72 + curls[0] * 0.28
+      // Noticeable bare-hand fist strength (or controller squeeze grip)
+      const fistCurlAvg = (curls[1] + curls[2] + curls[3] + curls[4]) / 4
+      const palmSqueezeStrength = ctrl?.object
+        ? Math.max(curls[2], curls[0] * 0.9)
+        : fistCurlAvg * 0.78 + curls[0] * 0.22
 
       if (side === 'left') {
         lp.leftPos = posArr
@@ -247,6 +254,7 @@ export function MyRoomARRig() {
           pos: [...obj.pos],
           quat: [...obj.quat],
           crumpleFactor: obj.crumpleFactor,
+          foldFactor: obj.foldFactor,
           deformQ: [...obj.deformQ],
           timestamp: Date.now(),
         })
@@ -263,11 +271,12 @@ export function MyRoomARRig() {
           return
         }
         if (!handRes.isGrabbing) {
-          // Released object into real AR room physics!
+          // Released object into real AR room physics weighted by real material mass & drag!
           heldByHandRef.current[handRes.side] = null
           const otherHeld = heldByHandRef.current[handRes.side === 'left' ? 'right' : 'left']
           if (otherHeld !== heldId) {
-            const vel = handRes.estimator.computeVelocity(nowSec, 1.05, 8.5)
+            const spec = MATERIAL_PHYSICS[obj.kind]
+            const vel = handRes.estimator.computeVelocity(nowSec, spec.throwGain, spec.maxThrowSpeed)
             obj.isHeldByLocal = false
             obj.ownerId = null
             obj.vel = vel
@@ -377,11 +386,33 @@ export function MyRoomARRig() {
         }
       }
 
-      // Open palm / hand touch on Head or Full Body Torso Capsule interacts & pushes smoothly
       const prevPalm = prevPalmPosRef.current[hRes.side]
       const palmVelX = (hRes.posArr[0] - prevPalm[0]) / Math.max(0.008, cDt)
       const palmVelZ = (hRes.posArr[2] - prevPalm[2]) / Math.max(0.008, cDt)
       prevPalmPosRef.current[hRes.side] = [...hRes.posArr]
+
+      // Distance "Pull To Me" gesture: if opponent went far away (>1.25m), close hand facing AI & pull toward chest!
+      if (heldByHandRef.current[hRes.side] === null && !companionHoldRef.current[hRes.side] && hRes.isGrabbing) {
+        const aiXZDist = Math.hypot(ai.pos[0] - lp.headPos[0], ai.pos[2] - lp.headPos[2])
+        if (aiXZDist > 1.25) {
+          const toUserX = (lp.headPos[0] - hRes.posArr[0])
+          const toUserZ = (lp.headPos[2] - hRes.posArr[2])
+          const uLen = Math.hypot(toUserX, toUserZ) || 1
+          const pullingTowardMe = (palmVelX * toUserX + palmVelZ * toUserZ) / uLen
+          const toAiX = ai.pos[0] - lp.headPos[0]
+          const toAiZ = ai.pos[2] - lp.headPos[2]
+          const palmFromHeadX = hRes.posArr[0] - lp.headPos[0]
+          const palmFromHeadZ = hRes.posArr[2] - lp.headPos[2]
+          const pLen = Math.hypot(palmFromHeadX, palmFromHeadZ) || 1
+          const handAimAtAi = (toAiX * palmFromHeadX + toAiZ * palmFromHeadZ) / (aiXZDist * pLen)
+
+          if (pullingTowardMe > 0.32 && handAimAtAi > 0.45 && !ai.pullToUserActive) {
+            ai.pullToUserActive = true
+            pulseXRControllerHaptics(hRes.activeInput, 0.55, 50)
+            useMyRoomStore.getState().setStatusHint('Pulling companion back nearest to you!')
+          }
+        }
+      }
 
       if (heldByHandRef.current[hRes.side] === null && !companionHoldRef.current[hRes.side]) {
         const dHead = Math.hypot(
@@ -427,10 +458,11 @@ export function MyRoomARRig() {
     const leftId = heldByHandRef.current.left
     const rightId = heldByHandRef.current.right
 
-    // 2. Bimanual Two-Hand Manipulation: Squeeze Together OR Tear Down / Rip Apart!
+    // 2. Bimanual Two-Hand Manipulation: Tear Down OR Fold (Paper/Cloth) OR Palm Squeeze!
     if (leftId !== null && leftId === rightId) {
       const obj = myRoomRuntime.objects.get(leftId)
       if (obj) {
+        const spec = MATERIAL_PHYSICS[obj.kind]
         const span = Math.hypot(
           rightRes.posArr[0] - leftRes.posArr[0],
           rightRes.posArr[1] - leftRes.posArr[1],
@@ -440,80 +472,85 @@ export function MyRoomARRig() {
           dualRestSpanRef.current = Math.max(0.08, span)
         }
 
-        // Tear Check: pulling both palms strongly apart rips Paper or splits Artificial Clay!
-        const tearThreshold = Math.max(obj.meshData.approxRadius * 1.6, dualRestSpanRef.current * 1.48) + 0.12
+        // Tear Check: pulling both palms strongly apart rips Paper, Cloth or splits Clay (rejected for Wood/Metal!)
+        const tearThreshold = Math.max(obj.meshData.approxRadius * 1.55, dualRestSpanRef.current * 1.45) + 0.11
         if (span > tearThreshold) {
-          const split = computeTearSplitDeforms(
-            obj.meshData,
-            obj.kind,
-            obj.pos,
-            obj.quat,
-            leftRes.posArr,
-            rightRes.posArr,
-            obj.deformSeed,
-            obj.tearGeneration
-          )
-          if (split.canTear) {
-            const basePos: [number, number, number] = [...obj.pos]
-            const baseQuat: [number, number, number, number] = [...obj.quat]
-            const baseKind = obj.kind
-            const basePreset = obj.preset
-            const baseColor = obj.color
-            const nextScale = obj.scale * split.childScale
-            const nextGen = obj.tearGeneration + 1
-
-            deleteRuntimeCraftObject(obj.id, true)
-
-            const pieceLeft = spawnRuntimeCraftObject({
-              ownerId: myId,
-              creatorId: myId,
-              kind: baseKind,
-              preset: basePreset,
-              color: baseColor,
-              pos: [
-                basePos[0] + split.leftOffsetWorld[0],
-                basePos[1] + split.leftOffsetWorld[1],
-                basePos[2] + split.leftOffsetWorld[2],
-              ],
-              quat: baseQuat,
-              scale: nextScale,
-              tearGeneration: nextGen,
-              deformQ: split.leftDeformQ,
-              broadcast: true,
-            })
-            const pieceRight = spawnRuntimeCraftObject({
-              ownerId: myId,
-              creatorId: myId,
-              kind: baseKind,
-              preset: basePreset,
-              color: baseColor,
-              pos: [
-                basePos[0] + split.rightOffsetWorld[0],
-                basePos[1] + split.rightOffsetWorld[1],
-                basePos[2] + split.rightOffsetWorld[2],
-              ],
-              quat: baseQuat,
-              scale: nextScale,
-              tearGeneration: nextGen,
-              deformQ: split.rightDeformQ,
-              broadcast: true,
-            })
-
-            pieceLeft.isHeldByLocal = true
-            pieceRight.isHeldByLocal = true
-            heldByHandRef.current.left = pieceLeft.id
-            heldByHandRef.current.right = pieceRight.id
-            dualRestSpanRef.current = null
-            useMyRoomStore.getState().setStatusHint(
-              baseKind === 'paper' ? 'Tore Paper into two scraps!' : 'Ripped Clay into two pieces!'
+          if (!spec.canTear) {
+            playMaterialActionSfx(obj.kind, 'reject')
+            pulseXRControllerHaptics(rightRes.activeInput, 0.45, 35)
+            useMyRoomStore.getState().setStatusHint(`Solid ${spec.label} cannot be torn or squeezed!`)
+          } else {
+            const split = computeTearSplitDeforms(
+              obj.meshData,
+              obj.kind,
+              obj.pos,
+              obj.quat,
+              leftRes.posArr,
+              rightRes.posArr,
+              obj.deformSeed,
+              obj.tearGeneration
             )
-            pulseXRControllerHaptics(leftRes.activeInput, 0.9, 85)
-            pulseXRControllerHaptics(rightRes.activeInput, 0.9, 85)
-            return
+            if (split.canTear) {
+              const basePos: [number, number, number] = [...obj.pos]
+              const baseQuat: [number, number, number, number] = [...obj.quat]
+              const baseKind = obj.kind
+              const basePreset = obj.preset
+              const baseColor = obj.color
+              const nextScale = obj.scale * split.childScale
+              const nextGen = obj.tearGeneration + 1
+
+              deleteRuntimeCraftObject(obj.id, true)
+
+              const pieceLeft = spawnRuntimeCraftObject({
+                ownerId: myId,
+                creatorId: myId,
+                kind: baseKind,
+                preset: basePreset,
+                color: baseColor,
+                pos: [
+                  basePos[0] + split.leftOffsetWorld[0],
+                  basePos[1] + split.leftOffsetWorld[1],
+                  basePos[2] + split.leftOffsetWorld[2],
+                ],
+                quat: baseQuat,
+                scale: nextScale,
+                tearGeneration: nextGen,
+                deformQ: split.leftDeformQ,
+                broadcast: true,
+              })
+              const pieceRight = spawnRuntimeCraftObject({
+                ownerId: myId,
+                creatorId: myId,
+                kind: baseKind,
+                preset: basePreset,
+                color: baseColor,
+                pos: [
+                  basePos[0] + split.rightOffsetWorld[0],
+                  basePos[1] + split.rightOffsetWorld[1],
+                  basePos[2] + split.rightOffsetWorld[2],
+                ],
+                quat: baseQuat,
+                scale: nextScale,
+                tearGeneration: nextGen,
+                deformQ: split.rightDeformQ,
+                broadcast: true,
+              })
+
+              pieceLeft.isHeldByLocal = true
+              pieceRight.isHeldByLocal = true
+              heldByHandRef.current.left = pieceLeft.id
+              heldByHandRef.current.right = pieceRight.id
+              dualRestSpanRef.current = null
+              playMaterialActionSfx(baseKind, 'tear')
+              useMyRoomStore.getState().setStatusHint(`Tore ${spec.label} into two pieces!`)
+              pulseXRControllerHaptics(leftRes.activeInput, 0.9, 85)
+              pulseXRControllerHaptics(rightRes.activeInput, 0.9, 85)
+              return
+            }
           }
         }
 
-        // Center between both palms while squeezing
+        // Keep object centered smoothly between both palms
         obj.pos = [
           (leftRes.posArr[0] + rightRes.posArr[0]) * 0.5,
           (leftRes.posArr[1] + rightRes.posArr[1]) * 0.5,
@@ -521,7 +558,7 @@ export function MyRoomARRig() {
         ]
         obj.quat = [...rightRes.quatArr]
 
-        const compress = Math.max(0, (dualRestSpanRef.current - span) / 0.14)
+        const compress = Math.max(0, (dualRestSpanRef.current - span) / 0.11)
         const squeezeIntensity = Math.min(
           1,
           Math.max(
@@ -530,46 +567,84 @@ export function MyRoomARRig() {
           )
         )
 
-        if (squeezeIntensity > 0.32) {
-          const rA = squeezeCraftWithPalm(
-            obj.meshData,
-            obj.kind,
-            obj.pos,
-            obj.quat,
-            leftRes.posArr,
-            leftRes.palmNormal,
-            squeezeIntensity,
-            obj.deformSeed,
-            obj.crumpleFactor,
-            cDt
-          )
-          const rB = squeezeCraftWithPalm(
-            obj.meshData,
-            obj.kind,
-            obj.pos,
-            obj.quat,
-            rightRes.posArr,
-            rightRes.palmNormal,
-            squeezeIntensity,
-            obj.deformSeed,
-            rA.nextCrumple,
-            cDt
-          )
-          if (rA.dirty || rB.dirty) {
-            obj.crumpleFactor = rB.nextCrumple
-            obj.deformQ = encodeDeformOffsets(
-              obj.meshData.restPositions,
-              obj.meshData.currPositions
+        if (compress > 0.12 || squeezeIntensity > 0.42) {
+          if (!spec.canSqueeze) {
+            playMaterialActionSfx(obj.kind, 'reject')
+            useMyRoomStore.getState().setStatusHint(`Solid ${spec.label} cannot be squeezed!`)
+          } else if (spec.canFold && compress > 0.12 && squeezeIntensity < 0.72) {
+            // Bringing palms together smoothly while open folds Paper or Cloth cleanly in half!
+            const fRes = foldCraftWithHands(
+              obj.meshData,
+              obj.kind,
+              obj.quat,
+              leftRes.posArr,
+              rightRes.posArr,
+              obj.foldFactor,
+              cDt * (0.95 + compress * 1.4)
             )
-            obj.dirtyNetwork = true
-            syncDirtyObject(obj, false)
+            if (fRes.dirty) {
+              obj.foldFactor = fRes.nextFold
+              obj.deformQ = encodeDeformOffsets(
+                obj.meshData.restPositions,
+                obj.meshData.currPositions
+              )
+              obj.dirtyNetwork = true
+              syncDirtyObject(obj, false)
+              playMaterialActionSfx(obj.kind, 'fold')
+              useMyRoomStore.getState().setStatusHint(`Folded ${spec.label}!`)
+            }
+          } else {
+            // Two-palm axis compression: squashes Clay into pancake/oval or crumples Paper/Cloth!
+            const squeezeDirX = rightRes.posArr[0] - leftRes.posArr[0]
+            const squeezeDirY = rightRes.posArr[1] - leftRes.posArr[1]
+            const squeezeDirZ = rightRes.posArr[2] - leftRes.posArr[2]
+            const sdLen = Math.hypot(squeezeDirX, squeezeDirY, squeezeDirZ) || 1
+            const nLeft: [number, number, number] = [squeezeDirX / sdLen, squeezeDirY / sdLen, squeezeDirZ / sdLen]
+            const nRight: [number, number, number] = [-nLeft[0], -nLeft[1], -nLeft[2]]
+
+            const rA = squeezeCraftWithPalm(
+              obj.meshData,
+              obj.kind,
+              obj.pos,
+              obj.quat,
+              leftRes.posArr,
+              nLeft,
+              squeezeIntensity,
+              obj.deformSeed,
+              obj.crumpleFactor,
+              cDt
+            )
+            const rB = squeezeCraftWithPalm(
+              obj.meshData,
+              obj.kind,
+              obj.pos,
+              obj.quat,
+              rightRes.posArr,
+              nRight,
+              squeezeIntensity,
+              obj.deformSeed,
+              rA.nextCrumple,
+              cDt
+            )
+            if (rA.dirty || rB.dirty) {
+              obj.crumpleFactor = rB.nextCrumple
+              obj.deformQ = encodeDeformOffsets(
+                obj.meshData.restPositions,
+                obj.meshData.currPositions
+              )
+              obj.dirtyNetwork = true
+              syncDirtyObject(obj, false)
+              playMaterialActionSfx(obj.kind, 'squeeze')
+              pulseXRControllerHaptics(leftRes.activeInput, 0.28, 20)
+              pulseXRControllerHaptics(rightRes.activeInput, 0.28, 20)
+            }
           }
         }
       }
     } else {
       dualRestSpanRef.current = null
 
-      // Single-hand carry + optional fist/palm squeeze when fingers close tightly
+      // Single-hand carry + responsive squeeze when closing fist or pressing Grip
       const processSingleHeld = (handRes: ReturnType<typeof readHand>, objId: string | null) => {
         if (!objId) return
         const obj = myRoomRuntime.objects.get(objId)
@@ -577,9 +652,14 @@ export function MyRoomARRig() {
         obj.pos = [...handRes.posArr]
         obj.quat = [...handRes.quatArr]
 
-        // Firm fist closure (> 0.62) squeezes Clay / crumples Paper in palm; light pinch (< 0.55) carries gently!
-        if (handRes.palmSqueezeStrength > 0.6) {
-          const squeezeAmt = (handRes.palmSqueezeStrength - 0.52) * 2.0
+        const spec = MATERIAL_PHYSICS[obj.kind]
+        if (handRes.palmSqueezeStrength > 0.48) {
+          if (!spec.canSqueeze) {
+            playMaterialActionSfx(obj.kind, 'reject')
+            useMyRoomStore.getState().setStatusHint(`Solid ${spec.label} cannot be squeezed!`)
+            return
+          }
+          const squeezeAmt = Math.min(1, Math.max(0.28, (handRes.palmSqueezeStrength - 0.36) * 1.9))
           const res = squeezeCraftWithPalm(
             obj.meshData,
             obj.kind,
@@ -600,6 +680,8 @@ export function MyRoomARRig() {
             )
             obj.dirtyNetwork = true
             syncDirtyObject(obj, false)
+            playMaterialActionSfx(obj.kind, 'squeeze')
+            pulseXRControllerHaptics(handRes.activeInput, 0.22, 16)
           }
         }
       }
@@ -608,7 +690,7 @@ export function MyRoomARRig() {
       processSingleHeld(rightRes, rightId)
     }
 
-    // 3. Direct Open-Palm Press Deformation on Any Unheld Table/Floor Object (Bare Palm Sculpting!)
+    // 3. Direct Open-Palm / Free-Hand Press Deformation on Any Unheld Clay / Paper / Cloth
     const applyFreePalmSculpt = (handRes: ReturnType<typeof readHand>, heldId: string | null) => {
       if (heldId !== null) return
       myRoomRuntime.objects.forEach((obj) => {
@@ -618,7 +700,12 @@ export function MyRoomARRig() {
           obj.pos[1] - handRes.posArr[1],
           obj.pos[2] - handRes.posArr[2]
         )
-        if (d <= obj.meshData.approxRadius + PALM_SQUEEZE_RADIUS && handRes.palmSqueezeStrength > 0.3) {
+        if (d <= obj.meshData.approxRadius + PALM_SQUEEZE_RADIUS && handRes.palmSqueezeStrength > 0.18) {
+          const spec = MATERIAL_PHYSICS[obj.kind]
+          if (!spec.canSqueeze) {
+            playMaterialActionSfx(obj.kind, 'reject')
+            return
+          }
           const res = squeezeCraftWithPalm(
             obj.meshData,
             obj.kind,
@@ -626,7 +713,7 @@ export function MyRoomARRig() {
             obj.quat,
             handRes.posArr,
             handRes.palmNormal,
-            handRes.palmSqueezeStrength,
+            Math.max(0.45, handRes.palmSqueezeStrength),
             obj.deformSeed,
             obj.crumpleFactor,
             cDt
@@ -639,6 +726,7 @@ export function MyRoomARRig() {
             )
             obj.dirtyNetwork = true
             syncDirtyObject(obj, false)
+            playMaterialActionSfx(obj.kind, 'squeeze')
           }
         }
       })

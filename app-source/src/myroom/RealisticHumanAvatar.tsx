@@ -5,16 +5,22 @@ import { getAthleteProfile, HumanFaceHead } from '../scene/HumanFace'
 import { TextLabel } from '../scene/TextLabel'
 import { AvatarGender, HandSide } from '../types/game'
 
+const UPPER_ARM_LEN = 0.285
+const FOREARM_LEN = 0.255
+const MAX_ARM_REACH = UPPER_ARM_LEN + FOREARM_LEN - 0.015
+
 const _upAxis = new THREE.Vector3(0, 1, 0)
 const _segDir = new THREE.Vector3()
 const _segMid = new THREE.Vector3()
 const _shoulder = new THREE.Vector3()
 const _wrist = new THREE.Vector3()
 const _elbow = new THREE.Vector3()
+const _armVec = new THREE.Vector3()
+const _poleDir = new THREE.Vector3()
+const _bendNormal = new THREE.Vector3()
 
 /**
- * Generates an anatomically contoured LatheGeometry segment (muscle/garment silhouette)
- * instead of simple cylinders.
+ * Generates an anatomically contoured LatheGeometry segment (deltoid/bicep, forearm, quad/calf silhouette).
  */
 function buildSculptedLimbGeometry(profileRadii: number[], height: number): THREE.LatheGeometry {
   const pts: THREE.Vector2[] = []
@@ -23,37 +29,38 @@ function buildSculptedLimbGeometry(profileRadii: number[], height: number): THRE
     const t = i / count
     pts.push(new THREE.Vector2(profileRadii[i], (t - 0.5) * height))
   }
-  const geo = new THREE.LatheGeometry(pts, 18)
+  const geo = new THREE.LatheGeometry(pts, 20)
   geo.computeVertexNormals()
   return geo
 }
 
 /**
- * Generates a realistic multi-ring oval anatomical torso with male/female chest, rib, waist & hip curves.
+ * Generates an oval anatomical torso loft from pelvis girdle through waist, chest, clavicles & traps.
  */
 function buildAnatomicalTorsoGeometry(gender: AvatarGender): THREE.BufferGeometry {
   const isFemale = gender === 'female'
-  // Vertical rings from hip/hem (y=-0.27) up to collarbone/shoulders (y=+0.27)
   const rings = isFemale
     ? [
-        { y: -0.27, rx: 0.165, rz: 0.115, cz: 0.005 }, // Hips
-        { y: -0.19, rx: 0.148, rz: 0.102, cz: 0.006 }, // Pelvis taper
-        { y: -0.09, rx: 0.118, rz: 0.088, cz: 0.004 }, // Defined waist
-        { y: 0.02, rx: 0.132, rz: 0.098, cz: -0.002 }, // Ribcage
-        { y: 0.11, rx: 0.155, rz: 0.118, cz: -0.016 }, // Contoured chest
-        { y: 0.21, rx: 0.162, rz: 0.102, cz: -0.005 }, // Upper chest / shoulders
-        { y: 0.27, rx: 0.088, rz: 0.074, cz: 0.004 },  // Neck collar
+        { y: -0.27, rx: 0.172, rz: 0.118, cz: 0.008 }, // Upper hip / glute transition
+        { y: -0.18, rx: 0.15, rz: 0.104, cz: 0.006 },
+        { y: -0.08, rx: 0.116, rz: 0.088, cz: 0.004 }, // Anatomical waist
+        { y: 0.03, rx: 0.132, rz: 0.098, cz: -0.003 },
+        { y: 0.12, rx: 0.156, rz: 0.12, cz: -0.018 },  // Chest / bust volume
+        { y: 0.21, rx: 0.16, rz: 0.102, cz: -0.006 },  // Clavicle line
+        { y: 0.27, rx: 0.104, rz: 0.078, cz: 0.004 },  // Trapezius slope into neck
+        { y: 0.31, rx: 0.056, rz: 0.052, cz: 0.008 },  // Neck base
       ]
     : [
-        { y: -0.27, rx: 0.156, rz: 0.112, cz: 0.002 }, // Waist/hips
-        { y: -0.16, rx: 0.146, rz: 0.106, cz: 0.002 }, // Lower abdomen
-        { y: -0.04, rx: 0.152, rz: 0.112, cz: 0.0 },   // Obliques/mid
-        { y: 0.09, rx: 0.178, rz: 0.126, cz: -0.01 },  // Broad chest/pectorals
-        { y: 0.2, rx: 0.192, rz: 0.115, cz: -0.006 },  // Athletic shoulders
-        { y: 0.27, rx: 0.098, rz: 0.082, cz: 0.005 },  // Collar
+        { y: -0.27, rx: 0.158, rz: 0.112, cz: 0.004 },
+        { y: -0.16, rx: 0.146, rz: 0.106, cz: 0.003 },
+        { y: -0.04, rx: 0.152, rz: 0.112, cz: 0.0 },
+        { y: 0.1, rx: 0.18, rz: 0.128, cz: -0.012 },   // Pectoral depth
+        { y: 0.21, rx: 0.194, rz: 0.116, cz: -0.006 }, // Broad clavicles
+        { y: 0.27, rx: 0.12, rz: 0.086, cz: 0.004 },   // Trapezius / collar
+        { y: 0.31, rx: 0.066, rz: 0.062, cz: 0.008 },  // Neck base
       ]
 
-  const radialSegs = 24
+  const radialSegs = 26
   const positions: number[] = []
   const uvs: number[] = []
   const indices: number[] = []
@@ -65,8 +72,7 @@ function buildAnatomicalTorsoGeometry(gender: AvatarGender): THREE.BufferGeometr
       const u = s / radialSegs
       const theta = u * Math.PI * 2
       const x = Math.sin(theta) * ring.rx
-      // Slightly sculpt anterior/posterior chest asymmetry
-      const frontWeight = Math.cos(theta) < 0 ? 1.08 : 0.92
+      const frontWeight = Math.cos(theta) < 0 ? 1.09 : 0.91
       const z = Math.cos(theta) * ring.rz * frontWeight + ring.cz
       positions.push(x, ring.y, z)
       uvs.push(u, v)
@@ -101,7 +107,6 @@ function createWovenFabricTexture(baseHex: string, accentHex: string): THREE.Can
   ctx.fillStyle = baseHex
   ctx.fillRect(0, 0, 256, 256)
 
-  // Fine woven knit grain & subtle cloth shade lines
   ctx.fillStyle = 'rgba(255, 255, 255, 0.045)'
   for (let y = 0; y < 256; y += 4) {
     ctx.fillRect(0, y, 256, 1)
@@ -111,9 +116,11 @@ function createWovenFabricTexture(baseHex: string, accentHex: string): THREE.Can
     ctx.fillRect(x, 0, 1, 256)
   }
 
-  // Subtle shoulder/chest trim stripe
+  // Collar hem seam + vertical front zipper/pleat line for realistic clothing structure
   ctx.fillStyle = accentHex
-  ctx.fillRect(0, 206, 256, 18)
+  ctx.fillRect(0, 214, 256, 14)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.12)'
+  ctx.fillRect(126, 20, 4, 210)
 
   const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
@@ -121,22 +128,32 @@ function createWovenFabricTexture(baseHex: string, accentHex: string): THREE.Can
   return tex
 }
 
-function createSculptedShoeMesh(accentColor: string) {
+function SculptedSneaker({
+  accentColor,
+  footAngle,
+}: {
+  accentColor: string
+  footAngle?: number
+}) {
   return (
-    <group position={[0, -0.4, -0.035]}>
-      {/* Contoured sneaker midsole */}
-      <mesh position={[0, -0.018, 0]} scale={[1.0, 0.72, 1.35]}>
-        <capsuleGeometry args={[0.046, 0.075, 6, 12]} />
-        <meshStandardMaterial color="#f8fafc" roughness={0.4} />
+    <group position={[0, -0.39, 0]} rotation={[footAngle ?? 0, 0, 0]}>
+      {/* Ankle collar */}
+      <mesh position={[0, 0.01, 0]}>
+        <sphereGeometry args={[0.039, 12, 10]} />
+        <meshStandardMaterial color="#334155" roughness={0.75} />
       </mesh>
-      {/* Upper sneaker knit body */}
-      <mesh position={[0, 0.01, 0.008]} scale={[0.92, 0.78, 1.24]}>
-        <capsuleGeometry args={[0.042, 0.068, 6, 12]} />
+      {/* Sculpted rubber outsole */}
+      <mesh position={[0, -0.022, -0.036]} scale={[1.0, 0.65, 1.38]}>
+        <capsuleGeometry args={[0.045, 0.08, 6, 12]} />
+        <meshStandardMaterial color="#f8fafc" roughness={0.42} />
+      </mesh>
+      {/* Knit upper sneaker body */}
+      <mesh position={[0, 0.002, -0.03]} scale={[0.92, 0.76, 1.26]}>
+        <capsuleGeometry args={[0.041, 0.072, 6, 12]} />
         <meshStandardMaterial color={accentColor} roughness={0.62} />
       </mesh>
-      {/* Heel tab & laces trim */}
-      <mesh position={[0, 0.03, -0.025]} rotation={[0.4, 0, 0]}>
-        <boxGeometry args={[0.042, 0.018, 0.06]} />
+      <mesh position={[0, 0.022, -0.048]} rotation={[0.45, 0, 0]}>
+        <boxGeometry args={[0.04, 0.016, 0.055]} />
         <meshStandardMaterial color="#e2e8f0" roughness={0.5} />
       </mesh>
     </group>
@@ -151,30 +168,44 @@ function ArticulatedFullHand({
   skinColor: string
 }) {
   const mirror = side === 'left' ? 1 : -1
-  const fingerOffsets = [
-    { x: 0.03, z: -0.01, len: 0.042, r: 0.008, thumb: true },
-    { x: 0.022, z: -0.038, len: 0.056, r: 0.007 },
-    { x: 0.007, z: -0.041, len: 0.062, r: 0.0072 },
-    { x: -0.008, z: -0.039, len: 0.057, r: 0.0068 },
-    { x: -0.022, z: -0.034, len: 0.046, r: 0.006 },
+  const fingers = [
+    { x: 0.029, z: -0.008, lenA: 0.026, lenB: 0.02, r: 0.0078, thumb: true },
+    { x: 0.021, z: -0.036, lenA: 0.034, lenB: 0.026, r: 0.0068 },
+    { x: 0.006, z: -0.039, lenA: 0.038, lenB: 0.028, r: 0.007 },
+    { x: -0.008, z: -0.037, lenA: 0.035, lenB: 0.026, r: 0.0065 },
+    { x: -0.022, z: -0.031, lenA: 0.027, lenB: 0.021, r: 0.0058 },
   ]
 
   return (
     <group>
-      {/* Anatomically rounded palm */}
-      <mesh scale={[1.0, 0.42, 1.15]}>
-        <sphereGeometry args={[0.036, 14, 10]} />
+      {/* Smooth wrist joint sphere */}
+      <mesh position={[0, 0, 0.012]} scale={[1.1, 0.65, 1.0]}>
+        <sphereGeometry args={[0.024, 12, 10]} />
         <meshStandardMaterial color={skinColor} roughness={0.55} />
       </mesh>
-      {fingerOffsets.map((f, idx) => (
-        <mesh
+      {/* Tapered anatomical palm */}
+      <mesh position={[0, 0, -0.016]} scale={[1.05, 0.4, 1.15]}>
+        <sphereGeometry args={[0.034, 14, 12]} />
+        <meshStandardMaterial color={skinColor} roughness={0.55} />
+      </mesh>
+      {/* Two-phalanx naturally slightly curved fingers + opposed thumb */}
+      {fingers.map((f, idx) => (
+        <group
           key={idx}
-          position={[f.x * mirror, f.thumb ? -0.004 : 0, f.z - f.len * 0.45]}
-          rotation={[Math.PI * 0.5 + 0.18, 0, f.thumb ? mirror * 0.45 : 0]}
+          position={[f.x * mirror, f.thumb ? -0.005 : 0, f.z]}
+          rotation={[f.thumb ? 0.35 : 0.24, 0, f.thumb ? mirror * 0.48 : 0]}
         >
-          <capsuleGeometry args={[f.r, f.len, 5, 8]} />
-          <meshStandardMaterial color={skinColor} roughness={0.55} />
-        </mesh>
+          <mesh position={[0, 0, -f.lenA * 0.5]} rotation={[Math.PI * 0.5, 0, 0]}>
+            <capsuleGeometry args={[f.r, f.lenA, 5, 8]} />
+            <meshStandardMaterial color={skinColor} roughness={0.55} />
+          </mesh>
+          <group position={[0, 0, -f.lenA]} rotation={[0.35, 0, 0]}>
+            <mesh position={[0, 0, -f.lenB * 0.5]} rotation={[Math.PI * 0.5, 0, 0]}>
+              <capsuleGeometry args={[f.r * 0.84, f.lenB, 5, 8]} />
+              <meshStandardMaterial color={skinColor} roughness={0.54} />
+            </mesh>
+          </group>
+        </group>
       ))}
     </group>
   )
@@ -228,8 +259,9 @@ export interface RealisticHumanAvatarProps {
 }
 
 /**
- * Upgraded realistic 3D full-body human avatar (configurable Male or Female anatomy,
- * woven fabric textures, contoured muscular Lathe limbs, sneaker shoes, and 5-finger hands).
+ * Upgraded realistic 3D full-body human avatar: seamless spherical shoulder/elbow/hip/knee/ankle joints,
+ * exact 2-bone law-of-cosines elbow IK, contoured pelvic hip bowl, anatomical Male/Female torsos,
+ * sculpted muscles & woven cloth/denim textures, sneaker joints, and 5-finger articulated hands.
  */
 export function RealisticHumanAvatar({
   seedKey,
@@ -254,32 +286,32 @@ export function RealisticHumanAvatar({
   const upperArmGeo = useMemo(
     () =>
       buildSculptedLimbGeometry(
-        isFemale ? [0.033, 0.037, 0.042, 0.046, 0.034] : [0.038, 0.044, 0.052, 0.058, 0.044],
-        0.28
+        isFemale ? [0.032, 0.038, 0.043, 0.047, 0.038] : [0.037, 0.046, 0.054, 0.06, 0.048],
+        UPPER_ARM_LEN
       ),
     [isFemale]
   )
   const forearmGeo = useMemo(
     () =>
       buildSculptedLimbGeometry(
-        isFemale ? [0.022, 0.027, 0.033, 0.032] : [0.026, 0.032, 0.041, 0.038],
-        0.26
+        isFemale ? [0.022, 0.028, 0.034, 0.032] : [0.026, 0.033, 0.042, 0.037],
+        FOREARM_LEN
       ),
     [isFemale]
   )
   const thighGeo = useMemo(
     () =>
       buildSculptedLimbGeometry(
-        isFemale ? [0.048, 0.06, 0.072, 0.078, 0.064] : [0.052, 0.062, 0.074, 0.078, 0.068],
-        0.4
+        isFemale ? [0.05, 0.062, 0.075, 0.082, 0.072] : [0.054, 0.064, 0.077, 0.082, 0.074],
+        0.41
       ),
     [isFemale]
   )
   const calfGeo = useMemo(
     () =>
       buildSculptedLimbGeometry(
-        isFemale ? [0.032, 0.039, 0.05, 0.045, 0.046] : [0.035, 0.044, 0.056, 0.048, 0.05],
-        0.38
+        isFemale ? [0.033, 0.04, 0.051, 0.046, 0.046] : [0.036, 0.045, 0.058, 0.05, 0.05],
+        0.39
       ),
     [isFemale]
   )
@@ -304,10 +336,6 @@ export function RealisticHumanAvatar({
   const headRigRef = useRef<THREE.Group>(null)
   const chestBreathingRef = useRef<THREE.Mesh>(null)
   const labelGroupRef = useRef<THREE.Group>(null)
-  const hairOffsetRef = useRef<[number, number, number]>([0, 0, 0])
-  const _headWorldVec = useMemo(() => new THREE.Vector3(), [])
-  const _hairWorldVec = useMemo(() => new THREE.Vector3(), [])
-  const _headInvQuat = useMemo(() => new THREE.Quaternion(), [])
 
   const leftHipRef = useRef<THREE.Group>(null)
   const leftKneeRef = useRef<THREE.Group>(null)
@@ -316,13 +344,20 @@ export function RealisticHumanAvatar({
 
   const leftUpperRef = useRef<THREE.Mesh>(null)
   const leftForeRef = useRef<THREE.Mesh>(null)
+  const leftElbowJointRef = useRef<THREE.Mesh>(null)
   const rightUpperRef = useRef<THREE.Mesh>(null)
   const rightForeRef = useRef<THREE.Mesh>(null)
+  const rightElbowJointRef = useRef<THREE.Mesh>(null)
   const leftHandGroupRef = useRef<THREE.Group>(null)
   const rightHandGroupRef = useRef<THREE.Group>(null)
 
-  const shoulderHalfW = isFemale ? 0.168 : 0.21
-  const hipHalfW = isFemale ? 0.102 : 0.096
+  const hairOffsetRef = useRef<[number, number, number]>([0, 0, 0])
+  const _headWorldVec = useMemo(() => new THREE.Vector3(), [])
+  const _hairWorldVec = useMemo(() => new THREE.Vector3(), [])
+  const _headInvQuat = useMemo(() => new THREE.Quaternion(), [])
+
+  const shoulderHalfW = isFemale ? 0.172 : 0.206
+  const hipHalfW = isFemale ? 0.105 : 0.098
 
   useFrame((state) => {
     const t = state.clock.elapsedTime
@@ -342,8 +377,7 @@ export function RealisticHumanAvatar({
     } = getBodyAnchor()
 
     const activeWalk = walkSpeed * (1 - sitBlend * 0.85)
-    const stride = Math.sin(walkPhase) * 0.58 * activeWalk
-    // When sitting (sitBlend = 1), lower pelvis by ~0.39m so seated hips rest at ~0.47m and feet touch floor
+    const stride = Math.sin(walkPhase) * 0.56 * activeWalk
     const pelvisDrop = sitBlend * 0.39 + Math.abs(Math.sin(walkPhase)) * 0.025 * activeWalk
 
     if (rootRef.current) {
@@ -353,16 +387,18 @@ export function RealisticHumanAvatar({
 
     if (torsoGroupRef.current) {
       torsoGroupRef.current.rotation.set(
-        -0.04 * activeWalk + sitBlend * 0.05 + torsoPitch,
+        -0.04 * activeWalk + sitBlend * 0.06 + torsoPitch,
         Math.sin(walkPhase) * 0.06 * activeWalk,
-        headRoll * 0.25 + torsoRoll
+        headRoll * 0.22 + torsoRoll
       )
     }
 
     if (headRigRef.current) {
       headRigRef.current.rotation.set(headPitch, headYaw, headRoll)
       headRigRef.current.getWorldPosition(_headWorldVec)
-      _hairWorldVec.set(0, isFemale ? 0.04 : 0.08, isFemale ? 0.14 : 0.04).applyMatrix4(headRigRef.current.matrixWorld)
+      _hairWorldVec
+        .set(0, isFemale ? 0.04 : 0.08, isFemale ? 0.14 : 0.04)
+        .applyMatrix4(headRigRef.current.matrixWorld)
       onWorldTargets?.(
         [_headWorldVec.x, _headWorldVec.y, _headWorldVec.z],
         [_hairWorldVec.x, _hairWorldVec.y, _hairWorldVec.z]
@@ -397,75 +433,106 @@ export function RealisticHumanAvatar({
       labelGroupRef.current.lookAt(state.camera.position)
     }
 
-    // Leg articulation: blend seamlessly between walking stride and seated chair posture (+X lifts thighs forward, -X bends calves down)
     const sitHipAngle = sitBlend * 1.44
     const sitKneeAngle = -sitBlend * 1.48
     if (leftHipRef.current && leftKneeRef.current) {
-      leftHipRef.current.rotation.set(stride + sitHipAngle, 0, sitBlend * 0.06)
+      leftHipRef.current.rotation.set(stride + sitHipAngle, 0, sitBlend * 0.05)
       leftKneeRef.current.rotation.set(-Math.max(0, -stride * 1.15) + sitKneeAngle, 0, 0)
     }
     if (rightHipRef.current && rightKneeRef.current) {
-      rightHipRef.current.rotation.set(-stride + sitHipAngle, 0, -sitBlend * 0.06)
+      rightHipRef.current.rotation.set(-stride + sitHipAngle, 0, -sitBlend * 0.05)
       rightKneeRef.current.rotation.set(-Math.max(0, stride * 1.15) + sitKneeAngle, 0, 0)
     }
 
-    const computeArm = (
+    // Exact 2-bone analytical law-of-cosines Elbow IK (zero stretched limbs!)
+    const solveArmIK = (
       sideSign: number,
       wristArr: [number, number, number],
       upperMesh: THREE.Mesh | null,
       foreMesh: THREE.Mesh | null,
+      elbowJoint: THREE.Mesh | null,
       handGrp: THREE.Group | null
     ) => {
-      const cosY = Math.cos(yaw)
-      const sinY = Math.sin(yaw)
+      const effYaw = yaw + Math.sin(walkPhase) * 0.06 * activeWalk
+      const cosY = Math.cos(effYaw)
+      const sinY = Math.sin(effYaw)
       const sx = sideSign * shoulderHalfW
-      _shoulder.set(pos[0] + sx * cosY, pos[1] + 1.36 - pelvisDrop, pos[2] - sx * sinY)
+      _shoulder.set(pos[0] + sx * cosY, pos[1] + 1.38 - pelvisDrop, pos[2] - sx * sinY)
+
       _wrist.set(wristArr[0], wristArr[1], wristArr[2])
+      _armVec.subVectors(_wrist, _shoulder)
+      let d = _armVec.length()
+      if (d > MAX_ARM_REACH) {
+        _armVec.multiplyScalar(MAX_ARM_REACH / d)
+        _wrist.copy(_shoulder).add(_armVec)
+        d = MAX_ARM_REACH
+      } else if (d < 0.09) {
+        d = 0.09
+      }
 
-      _elbow.lerpVectors(_shoulder, _wrist, 0.48)
-      _elbow.y -= 0.11
-      _elbow.x += sideSign * cosY * 0.055
-      _elbow.z -= sideSign * sinY * 0.055
+      const cosAlpha = Math.max(
+        -0.98,
+        Math.min(
+          0.98,
+          (UPPER_ARM_LEN * UPPER_ARM_LEN + d * d - FOREARM_LEN * FOREARM_LEN) / (2 * UPPER_ARM_LEN * d)
+        )
+      )
+      const sinAlpha = Math.sqrt(Math.max(0, 1 - cosAlpha * cosAlpha))
+      const alongDir = _segDir.copy(_armVec).normalize()
 
-      alignSculptedSegment(upperMesh, _elbow, _shoulder, 0.28)
-      alignSculptedSegment(foreMesh, _wrist, _elbow, 0.26)
+      // Pole vector angles elbows naturally backward (+Z local) and slightly down/outward
+      _poleDir.set(sideSign * cosY * 0.45 + sinY * 0.8, -0.55, -sideSign * sinY * 0.45 + cosY * 0.8)
+      _poleDir.addScaledVector(alongDir, -_poleDir.dot(alongDir))
+      if (_poleDir.lengthSq() < 1e-4) _poleDir.set(0, -1, 0)
+      _poleDir.normalize()
 
+      _bendNormal.copy(alongDir).multiplyScalar(cosAlpha * UPPER_ARM_LEN).addScaledVector(_poleDir, sinAlpha * UPPER_ARM_LEN)
+      _elbow.copy(_shoulder).add(_bendNormal)
+
+      alignSculptedSegment(upperMesh, _elbow, _shoulder, UPPER_ARM_LEN)
+      alignSculptedSegment(foreMesh, _wrist, _elbow, FOREARM_LEN)
+
+      if (elbowJoint) {
+        elbowJoint.position.copy(_elbow)
+      }
       if (handGrp) {
         handGrp.position.copy(_wrist)
-        handGrp.lookAt(_wrist.x + (_wrist.x - _elbow.x), _wrist.y + (_wrist.y - _elbow.y), _wrist.z + (_wrist.z - _elbow.z))
+        handGrp.lookAt(
+          _wrist.x + (_wrist.x - _elbow.x),
+          _wrist.y + (_wrist.y - _elbow.y),
+          _wrist.z + (_wrist.z - _elbow.z)
+        )
       }
     }
 
-    computeArm(-1, getLeftWrist(), leftUpperRef.current, leftForeRef.current, leftHandGroupRef.current)
-    computeArm(1, getRightWrist(), rightUpperRef.current, rightForeRef.current, rightHandGroupRef.current)
+    solveArmIK(-1, getLeftWrist(), leftUpperRef.current, leftForeRef.current, leftElbowJointRef.current, leftHandGroupRef.current)
+    solveArmIK(1, getRightWrist(), rightUpperRef.current, rightForeRef.current, rightElbowJointRef.current, rightHandGroupRef.current)
   })
 
   return (
     <group>
       <group ref={rootRef}>
-        <group ref={torsoGroupRef} position={[0, 1.12, 0]}>
-          {/* Contoured Anatomical Woven Torso */}
+        {/* Upper Torso + Shoulders + Neck + Face */}
+        <group ref={torsoGroupRef} position={[0, 1.14, 0]}>
           <mesh ref={chestBreathingRef} geometry={torsoGeo} castShadow>
             <meshStandardMaterial map={shirtTex} roughness={0.68} />
           </mesh>
 
-          {/* Rounded Shoulder Caps */}
           {[-shoulderHalfW + 0.015, shoulderHalfW - 0.015].map((sx, idx) => (
-            <mesh key={idx} position={[sx, 0.2, 0]}>
+            <mesh key={idx} position={[sx, 0.21, 0]}>
               <sphereGeometry args={[isFemale ? 0.048 : 0.058, 14, 12]} />
               <meshStandardMaterial map={shirtTex} roughness={0.68} />
             </mesh>
           ))}
 
-          {/* Casual Belt & Pelvis Seam */}
+          {/* Casual Waistband / Belt Seam */}
           <mesh position={[0, -0.255, 0]} scale={[isFemale ? 1.0 : 0.96, 1, 0.72]}>
-            <cylinderGeometry args={[0.16, 0.162, 0.04, 20]} />
+            <cylinderGeometry args={[0.16, 0.164, 0.042, 22]} />
             <meshStandardMaterial color="#27272a" roughness={0.45} metalness={0.2} />
           </mesh>
 
-          {/* Realistic Face & Styled Hair */}
           {!hideHead && (
-            <group ref={headRigRef} position={[0, 0.44, 0]}>
+            <group ref={headRigRef} position={[0, 0.45, 0]}>
               <HumanFaceHead
                 profile={profile}
                 gender={gender}
@@ -477,49 +544,79 @@ export function RealisticHumanAvatar({
           )}
         </group>
 
+        {/* Seamless Sculpted Pelvis / Hip Bowl bridging lower waist into both thigh sockets */}
+        <mesh position={[0, 0.855, 0.005]} scale={[isFemale ? 1.12 : 1.04, 0.85, 0.78]}>
+          <sphereGeometry args={[0.145, 20, 14]} />
+          <meshStandardMaterial map={pantsTex} roughness={0.78} />
+        </mesh>
+
         {/* Nameplate */}
-        <group ref={labelGroupRef} position={[0, 1.88, 0]}>
-          <TextLabel fontSize={0.09} color={speakingLevel > 0.1 ? '#34d399' : '#f8fafc'}>
+        <group ref={labelGroupRef} position={[0, 1.9, 0]}>
+          <TextLabel fontSize={0.088} color={speakingLevel > 0.1 ? '#34d399' : '#f8fafc'}>
             {displayName}
           </TextLabel>
         </group>
 
-        {/* Left Sculpted Leg & Sneaker */}
-        <group ref={leftHipRef} position={[-hipHalfW, 0.86, 0]}>
-          <mesh geometry={thighGeo} position={[0, -0.2, 0]}>
+        {/* Left & Right Sculpted Legs with Rounded Knee Caps & Sneakers */}
+        <group ref={leftHipRef} position={[-hipHalfW, 0.85, 0]}>
+          <mesh position={[0, -0.01, 0]}>
+            <sphereGeometry args={[0.072, 14, 12]} />
             <meshStandardMaterial map={pantsTex} roughness={0.78} />
           </mesh>
-          <group ref={leftKneeRef} position={[0, -0.4, 0]}>
-            <mesh geometry={calfGeo} position={[0, -0.2, 0]}>
+          <mesh geometry={thighGeo} position={[0, -0.205, 0]}>
+            <meshStandardMaterial map={pantsTex} roughness={0.78} />
+          </mesh>
+          <group ref={leftKneeRef} position={[0, -0.41, 0]}>
+            <mesh>
+              <sphereGeometry args={[0.05, 14, 12]} />
               <meshStandardMaterial map={pantsTex} roughness={0.78} />
             </mesh>
-            {createSculptedShoeMesh(trimColor)}
+            <mesh geometry={calfGeo} position={[0, -0.195, 0]}>
+              <meshStandardMaterial map={pantsTex} roughness={0.78} />
+            </mesh>
+            <SculptedSneaker accentColor={trimColor} />
           </group>
         </group>
 
-        {/* Right Sculpted Leg & Sneaker */}
-        <group ref={rightHipRef} position={[hipHalfW, 0.86, 0]}>
-          <mesh geometry={thighGeo} position={[0, -0.2, 0]}>
+        <group ref={rightHipRef} position={[hipHalfW, 0.85, 0]}>
+          <mesh position={[0, -0.01, 0]}>
+            <sphereGeometry args={[0.072, 14, 12]} />
             <meshStandardMaterial map={pantsTex} roughness={0.78} />
           </mesh>
-          <group ref={rightKneeRef} position={[0, -0.4, 0]}>
-            <mesh geometry={calfGeo} position={[0, -0.2, 0]}>
+          <mesh geometry={thighGeo} position={[0, -0.205, 0]}>
+            <meshStandardMaterial map={pantsTex} roughness={0.78} />
+          </mesh>
+          <group ref={rightKneeRef} position={[0, -0.41, 0]}>
+            <mesh>
+              <sphereGeometry args={[0.05, 14, 12]} />
               <meshStandardMaterial map={pantsTex} roughness={0.78} />
             </mesh>
-            {createSculptedShoeMesh(trimColor)}
+            <mesh geometry={calfGeo} position={[0, -0.195, 0]}>
+              <meshStandardMaterial map={pantsTex} roughness={0.78} />
+            </mesh>
+            <SculptedSneaker accentColor={trimColor} />
           </group>
         </group>
       </group>
 
-      {/* World-space IK Arms & 5-Finger Hands */}
+      {/* World-space 2-Bone IK Arms, Spherical Elbow Joints & 2-Phalanx 5-Finger Hands */}
       <mesh ref={leftUpperRef} geometry={upperArmGeo}>
         <meshStandardMaterial map={shirtTex} roughness={0.68} />
+      </mesh>
+      <mesh ref={leftElbowJointRef}>
+        <sphereGeometry args={[isFemale ? 0.033 : 0.039, 12, 10]} />
+        <meshStandardMaterial color={profile.skinColor} roughness={0.56} />
       </mesh>
       <mesh ref={leftForeRef} geometry={forearmGeo}>
         <meshStandardMaterial color={profile.skinColor} roughness={0.56} />
       </mesh>
+
       <mesh ref={rightUpperRef} geometry={upperArmGeo}>
         <meshStandardMaterial map={shirtTex} roughness={0.68} />
+      </mesh>
+      <mesh ref={rightElbowJointRef}>
+        <sphereGeometry args={[isFemale ? 0.033 : 0.039, 12, 10]} />
+        <meshStandardMaterial color={profile.skinColor} roughness={0.56} />
       </mesh>
       <mesh ref={rightForeRef} geometry={forearmGeo}>
         <meshStandardMaterial color={profile.skinColor} roughness={0.56} />
