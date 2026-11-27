@@ -17,6 +17,7 @@ import { runtimeState, useGameStore } from '../store/useGameStore'
 import { BALL_RADIUS, getSpawnForSlot, HandSide } from '../types/game'
 import { isXRControllerButtonPressed, pulseXRControllerHaptics } from '../xr/controllerButtons'
 import { ArticulatedHand } from './ArticulatedHand'
+import { UnityLocalVRCharacter } from './UnityLocalVRCharacter'
 
 const VR_CATCH_RADIUS = 0.28
 const THROW_RECATCH_COOLDOWN_SEC = 0.28
@@ -292,6 +293,13 @@ function VRSessionRig() {
           <ArticulatedHand side="right" isGrabbingRef={grabStateRef} />
         )}
       </XROrigin>
+
+      {/* Unity 3D VR Character First-Person Body + Skinned VRIK Arms */}
+      <UnityLocalVRCharacter
+        uniformStyle="sport"
+        hideLeftHand={Boolean(!leftController?.object && leftHand)}
+        hideRightHand={Boolean(!rightController?.object && rightHand)}
+      />
 
       <mesh ref={leftAuraRef} visible={false}>
         <sphereGeometry args={[VR_CATCH_RADIUS, 16, 12]} />

@@ -9,6 +9,7 @@ import { runtimeState, useGameStore } from '../store/useGameStore'
 import { PeerInfo } from '../types/game'
 import { xrStore } from '../xr/xrStore'
 import { CraftObjectsLayer } from './CraftObjectMesh'
+import { LeftWristSmartWatch, RightHandActiveToolView } from './LeftWristSmartWatch'
 import { MyRoomARRig } from './MyRoomARRig'
 import { stepMyRoomAI } from './myroomAI'
 import { raycastRoomPlacementPoint } from './roomPhysics'
@@ -196,6 +197,7 @@ function InARCraftStudioPanel() {
 
   const selectedColor = useMyRoomStore((s) => s.selectedColor)
   const showRoomMesh = useMyRoomStore((s) => s.showRoomMesh)
+  const showSelfBody = useMyRoomStore((s) => s.showSelfBody)
   const opponentMode = useMyRoomStore((s) => s.opponentMode)
   const scannedCount = useMyRoomStore((s) => s.scannedSurfaceCount)
   const objectCount = useMyRoomStore((s) => s.objectCount)
@@ -258,11 +260,15 @@ function InARCraftStudioPanel() {
       .getState()
       .setStatusHint(
         `${spec.label} (${spec.massKg}kg): ${
-          spec.canSqueeze
-            ? spec.canFold
-              ? 'Squeeze, Fold, or Tear with palms!'
-              : 'Squeeze or Tear with palms!'
-            : 'Heavy solid — cannot squeeze or tear!'
+          spec.canFold
+            ? spec.canSqueeze
+              ? 'Fold, Squeeze, or Tear with hands!'
+              : 'Fold with 2 palms, Tear, or Write with Watch Pen!'
+            : spec.canSqueeze
+              ? 'Squeeze (same volume!), Tear, or Cut with Knife!'
+              : kind === 'wood'
+                ? 'Stack solidly, or Cut/Chop with Watch Knife/Axe!'
+                : 'Heavy solid — Stack structures & Probe with Watch Tester!'
         }`
       )
   }
@@ -300,21 +306,31 @@ function InARCraftStudioPanel() {
         onClick={() => spawnInRoom('cloth', 'towel')}
       />
 
-      {/* Row 2: Heavy Rigid Materials (No Squeeze) & Companion Pull */}
+      {/* Row 2: Heavy Rigid Building Materials (+ Thin Wide Wood Plate) & Companion Pull */}
       <ARStudioButton
-        position={[-0.31, 0.1, 0.016]}
-        label="+ WOOD (1.5kg)"
+        position={[-0.36, 0.1, 0.016]}
+        width={0.22}
+        label="+ WOOD BLK"
         color="#92400e"
         onClick={() => spawnInRoom('wood', 'block')}
       />
       <ARStudioButton
-        position={[0, 0.1, 0.016]}
-        label="+ METAL (3.4kg)"
+        position={[-0.12, 0.1, 0.016]}
+        width={0.22}
+        label="+ WOOD PLATE"
+        color="#b45309"
+        onClick={() => spawnInRoom('wood', 'plate')}
+      />
+      <ARStudioButton
+        position={[0.12, 0.1, 0.016]}
+        width={0.22}
+        label="+ METAL BLK"
         color="#475569"
         onClick={() => spawnInRoom('metal', 'block')}
       />
       <ARStudioButton
-        position={[0.31, 0.1, 0.016]}
+        position={[0.36, 0.1, 0.016]}
+        width={0.22}
         label="PULL NEAR ME"
         color="#0d9488"
         onClick={() => {
@@ -373,10 +389,15 @@ function InARCraftStudioPanel() {
         }}
       />
 
-      {/* Row 5: Main Lobby & Exit AR */}
+      {/* Row 5: Self Body, Main Lobby & Exit AR */}
       <ARStudioButton
-        position={[-0.18, -0.25, 0.016]}
-        width={0.36}
+        position={[-0.31, -0.25, 0.016]}
+        label={showSelfBody ? 'MY BODY: ON' : 'MY BODY: OFF'}
+        color={showSelfBody ? '#0ea5e9' : '#475569'}
+        onClick={() => useMyRoomStore.getState().setShowSelfBody(!showSelfBody)}
+      />
+      <ARStudioButton
+        position={[0, -0.25, 0.016]}
         label="MAIN LOBBY"
         color="#7c3aed"
         onClick={() => {
@@ -386,8 +407,7 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.18, -0.25, 0.016]}
-        width={0.36}
+        position={[0.31, -0.25, 0.016]}
         label="EXIT AR"
         color="#b91c1c"
         onClick={() => {
@@ -420,6 +440,8 @@ export function MyRoomArena() {
       <RoomScanner />
       <CraftObjectsLayer />
       <MyRoomARRig />
+      <LeftWristSmartWatch />
+      <RightHandActiveToolView />
       <InARCraftStudioPanel />
 
       {peerList.map((peer) => (

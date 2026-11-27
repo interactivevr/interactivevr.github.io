@@ -479,6 +479,10 @@ class P2PGameClient {
         existing.crumpleFactor = incoming.crumpleFactor
         existing.foldFactor = incoming.foldFactor ?? existing.foldFactor
         existing.deformQ = [...incoming.deformQ]
+        if (incoming.strokes) {
+          existing.strokes = incoming.strokes.map((s) => ({ color: s.color, points: s.points.map((p) => [p[0], p[1]]) }))
+          existing.strokeVersion += 1
+        }
         existing.timestamp = incoming.timestamp
         applyQuantizedDeform(existing.meshData, incoming.deformQ)
       }
@@ -492,6 +496,10 @@ class P2PGameClient {
       existing.crumpleFactor = deform.crumpleFactor
       existing.foldFactor = deform.foldFactor ?? existing.foldFactor
       existing.deformQ = [...deform.deformQ]
+      if (deform.strokes) {
+        existing.strokes = deform.strokes.map((s) => ({ color: s.color, points: s.points.map((p) => [p[0], p[1]]) }))
+        existing.strokeVersion += 1
+      }
       existing.timestamp = deform.timestamp
       applyQuantizedDeform(existing.meshData, deform.deformQ)
     })

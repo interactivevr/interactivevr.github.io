@@ -2,7 +2,23 @@ export type CraftMaterialKind = 'clay' | 'paper' | 'cloth' | 'wood' | 'metal'
 
 export type ClayShapePreset = 'sphere' | 'cylinder' | 'box'
 export type PaperShapePreset = 'sheet' | 'card'
-export type CraftShapePreset = 'sphere' | 'cylinder' | 'box' | 'sheet' | 'card' | 'towel' | 'plank' | 'block'
+export type CraftShapePreset =
+  | 'sphere'
+  | 'cylinder'
+  | 'box'
+  | 'sheet'
+  | 'card'
+  | 'towel'
+  | 'plank'
+  | 'plate'
+  | 'block'
+
+export type WristToolKind = 'none' | 'pen' | 'knife' | 'axe' | 'tester'
+
+export interface InkStroke2D {
+  color: string
+  points: Array<[number, number]>
+}
 
 export type MyRoomToolMode = 'sculpt-grab' | 'place' | 'tear'
 
@@ -36,7 +52,7 @@ export const MATERIAL_PHYSICS: Record<CraftMaterialKind, MaterialPhysicsSpec> = 
     friction: 0.35,
     throwGain: 0.72,
     maxThrowSpeed: 4.5,
-    canSqueeze: true,
+    canSqueeze: false, // Paper only folds/cuts/writes — squeezing disabled per spec!
     canFold: true,
     canTear: true,
   },
@@ -117,9 +133,10 @@ export interface CraftObjectNetState {
   crumpleFactor: number
   foldFactor?: number
   tearGeneration: number
-  // Quantized Int8 displacements (-127..127 mapped to ±0.24m) relative to rest geometry
+  // Quantized Int8 displacements (-127..127 mapped to ±0.26m) relative to rest geometry
   deformQ: number[]
   deformSeed: number
+  strokes?: InkStroke2D[]
   timestamp: number
 }
 
@@ -132,6 +149,7 @@ export interface CraftDeformNetPayload {
   crumpleFactor: number
   foldFactor?: number
   deformQ: number[]
+  strokes?: InkStroke2D[]
   timestamp: number
 }
 

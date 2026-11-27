@@ -2,6 +2,7 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { AvatarGender } from '../types/game'
+import { buildUnitySculptedHeadGeometry, createUnityFaceTexture } from './unityHumanoidBuilder'
 
 export interface AthleteLookProfile {
   skinColor: string
@@ -44,46 +45,6 @@ export function getAthleteProfile(seedKey: string | number, gender: AvatarGender
   return pool[Math.abs(hash) % pool.length]
 }
 
-function createSkinCanvasTexture(profile: AthleteLookProfile, gender: AvatarGender): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas')
-  canvas.width = 512
-  canvas.height = 512
-  const ctx = canvas.getContext('2d')!
-
-  // High-DPI shaded facial skin gradient with forehead/cheek highlights & jaw depth
-  const grad = ctx.createRadialGradient(256, 224, 56, 256, 260, 270)
-  grad.addColorStop(0, profile.skinColor)
-  grad.addColorStop(0.7, profile.skinColor)
-  grad.addColorStop(1, profile.skinShadow)
-  ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 512, 512)
-
-  // Soft cheekbone blush & warmth
-  ctx.fillStyle = gender === 'female' ? 'rgba(225, 105, 110, 0.16)' : 'rgba(210, 110, 95, 0.11)'
-  ctx.beginPath()
-  ctx.ellipse(178, 286, 46, 28, -0.1, 0, Math.PI * 2)
-  ctx.ellipse(334, 286, 46, 28, 0.1, 0, Math.PI * 2)
-  ctx.fill()
-
-  // Subtle nose bridge highlight & temple shading
-  ctx.fillStyle = 'rgba(255, 240, 225, 0.12)'
-  ctx.fillRect(244, 210, 24, 92)
-
-  // Optional stubble / beard shading on lower jaw (male only)
-  if (profile.hasBeard && gender === 'male') {
-    ctx.fillStyle = 'rgba(20, 15, 12, 0.34)'
-    ctx.beginPath()
-    ctx.ellipse(256, 396, 124, 92, 0, 0, Math.PI)
-    ctx.fill()
-  }
-
-  // Subtle optical corneal specular highlight + rich natural skin gradient
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  tex.needsUpdate = true
-  return tex
-}
-
 function createIrisCanvasTexture(eyeColor: string): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
   canvas.width = 128
@@ -91,21 +52,20 @@ function createIrisCanvasTexture(eyeColor: string): THREE.CanvasTexture {
   const ctx = canvas.getContext('2d')!
   ctx.fillStyle = eyeColor
   ctx.fillRect(0, 0, 128, 128)
-  // Dark outer limbal ring & radial iris fibers
   const grad = ctx.createRadialGradient(64, 64, 10, 64, 64, 62)
   grad.addColorStop(0, '#09090b')
   grad.addColorStop(0.32, eyeColor)
-  grad.addColorStop(0.85, eyeColor)
+  grad.addColorStop(0.84, eyeColor)
   grad.addColorStop(1, '#09090b')
   ctx.fillStyle = grad
   ctx.fillRect(0, 0, 128, 128)
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)'
-  ctx.lineWidth = 1.5
-  for (let i = 0; i < 24; i++) {
-    const a = (i / 24) * Math.PI * 2
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)'
+  ctx.lineWidth = 1.6
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2
     ctx.beginPath()
-    ctx.moveTo(64 + Math.cos(a) * 18, 64 + Math.sin(a) * 18)
-    ctx.lineTo(64 + Math.cos(a) * 52, 64 + Math.sin(a) * 52)
+    ctx.moveTo(64 + Math.cos(a) * 16, 64 + Math.sin(a) * 16)
+    ctx.lineTo(64 + Math.cos(a) * 54, 64 + Math.sin(a) * 54)
     ctx.stroke()
   }
   const tex = new THREE.CanvasTexture(canvas)
@@ -114,21 +74,42 @@ function createIrisCanvasTexture(eyeColor: string): THREE.CanvasTexture {
   return tex
 }
 
+function createHairTexture(hairColor: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = hairColor
+  ctx.fillRect(0, 0, 256, 256)
+  for (let x = 0; x < 256; x += 3) {
+    ctx.fillStyle = x % 6 === 0 ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.16)'
+    ctx.fillRect(x, 0, 1.5, 256)
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = THREE.RepeatWrapping
+  tex.needsUpdate = true
+  return tex
+}
+
 /**
- * Detailed sculpted 3D human head with realistic face features (3D eyes with blinking,
- * eyebrows, eyelashes, nose, lips, ears, styled 3D hair for male/female profiles, and neck).
+ * Unity-grade sculpted continuous 3D human head with anatomical orbital eye sockets,
+ * continuous nasal bridge + nostrils, sculpted cheekbones & lips, glossy clearcoat eyes,
+ * responsive blinking eyelids, and layered hair mesh.
  */
 export function HumanFaceHead({
   profile,
   gender = 'male',
   showHair = true,
   allowSunglasses = true,
+  hideNeck = false,
   hairOffsetRef,
 }: {
   profile: AthleteLookProfile
   gender?: AvatarGender
   showHair?: boolean
   allowSunglasses?: boolean
+  hideNeck?: boolean
   hairOffsetRef?: React.MutableRefObject<[number, number, number]>
 }) {
   const leftLidRef = useRef<THREE.Mesh>(null)
@@ -136,214 +117,201 @@ export function HumanFaceHead({
   const hairGroupRef = useRef<THREE.Group>(null)
   const blinkSeed = useMemo(() => Math.random() * 4.5, [])
 
-  const skinTex = useMemo(() => createSkinCanvasTexture(profile, gender), [profile, gender])
-  const irisTex = useMemo(() => createIrisCanvasTexture(profile.eyeColor), [profile.eyeColor])
-  useEffect(() => {
-    return () => {
-      skinTex.dispose()
-      irisTex.dispose()
-    }
-  }, [skinTex, irisTex])
-
   const isFemale = gender === 'female'
 
+  const headGeo = useMemo(() => buildUnitySculptedHeadGeometry(gender), [gender])
+  const skinTex = useMemo(() => createUnityFaceTexture(profile, gender), [profile, gender])
+  const irisTex = useMemo(() => createIrisCanvasTexture(profile.eyeColor), [profile.eyeColor])
+  const hairTex = useMemo(() => createHairTexture(profile.hairColor), [profile.hairColor])
+
+  useEffect(() => {
+    return () => {
+      headGeo.dispose()
+      skinTex.dispose()
+      irisTex.dispose()
+      hairTex.dispose()
+    }
+  }, [headGeo, skinTex, irisTex, hairTex])
+
   useFrame((state) => {
-    const cycle = (state.clock.elapsedTime + blinkSeed) % 3.6
-    const blinking = cycle > 3.46
-    const scaleY = blinking ? 1.0 : 0.05
+    const cycle = (state.clock.elapsedTime + blinkSeed) % 3.8
+    const blinking = cycle > 3.65
+    const scaleY = blinking ? 1.0 : 0.06
     if (leftLidRef.current) leftLidRef.current.scale.y = scaleY
     if (rightLidRef.current) rightLidRef.current.scale.y = scaleY
 
     if (hairGroupRef.current && hairOffsetRef) {
       const ho = hairOffsetRef.current
-      hairGroupRef.current.position.set(ho[0], 0.032 + ho[1], 0.006 + ho[2])
+      hairGroupRef.current.position.set(ho[0], 0.022 + ho[1], 0.004 + ho[2])
       hairGroupRef.current.rotation.set(ho[2] * 2.2, 0, -ho[0] * 2.5)
     }
   })
 
   return (
     <group>
-      {/* Anatomical Neck (slightly slenderer for female preset) */}
-      <mesh position={[0, -0.145, 0.015]}>
-        <cylinderGeometry args={[isFemale ? 0.044 : 0.054, isFemale ? 0.052 : 0.064, 0.125, 16]} />
-        <meshStandardMaterial color={profile.skinShadow} roughness={0.6} />
-      </mesh>
-
-      {/* Sculpted Cranium & Facial Volume */}
-      <mesh scale={[isFemale ? 0.88 : 0.92, 1.07, 0.97]}>
-        <sphereGeometry args={[0.126, 26, 20]} />
-        <meshStandardMaterial map={skinTex} roughness={0.55} metalness={0.02} />
-      </mesh>
-      {/* Cheekbones & Tapered Chin / Jawline */}
-      <mesh position={[0, -0.054, -0.022]} scale={[isFemale ? 0.68 : 0.78, 0.84, 0.86]}>
-        <sphereGeometry args={[0.092, 18, 14]} />
-        <meshStandardMaterial map={skinTex} roughness={0.56} />
-      </mesh>
-
-      {/* Left & Right Ears */}
-      {[-0.116, 0.116].map((ex, i) => (
-        <mesh key={i} position={[ex, -0.005, 0.008]} scale={[0.35, 0.95, 0.65]}>
-          <sphereGeometry args={[0.03, 10, 8]} />
-          <meshStandardMaterial color={profile.skinShadow} roughness={0.65} />
+      {/* Optional neck only for legacy disconnected mounts; SkinnedMesh includes continuous neck */}
+      {!hideNeck && (
+        <mesh position={[0, -0.145, 0.014]}>
+          <cylinderGeometry args={[isFemale ? 0.044 : 0.054, isFemale ? 0.052 : 0.064, 0.125, 16]} />
+          <meshStandardMaterial color={profile.skinShadow} roughness={0.56} />
         </mesh>
-      ))}
+      )}
 
-      {/* Sculpted 3D Nose Bridge + Tip */}
-      <mesh position={[0, -0.004, -0.122]} rotation={[0.25, 0, 0]}>
-        <boxGeometry args={[0.022, 0.044, 0.028]} />
-        <meshStandardMaterial color={profile.skinColor} roughness={0.56} />
-      </mesh>
-      <mesh position={[0, -0.022, -0.132]}>
-        <sphereGeometry args={[0.014, 10, 8]} />
-        <meshStandardMaterial color={profile.skinColor} roughness={0.56} />
+      {/* Continuous Sculpted High-Poly 3D Head & Facial Topography */}
+      <mesh geometry={headGeo} castShadow receiveShadow>
+        <meshStandardMaterial map={skinTex} roughness={0.5} metalness={0.02} />
       </mesh>
 
-      {/* Left & Right Eyes (Sclera + Colored Iris + Pupil + Blinking Eyelid) */}
-      {[-0.04, 0.04].map((ex, i) => (
-        <group key={i} position={[ex, 0.018, -0.11]}>
+      {/* Recessed Glossy 3D Eyeballs seated cleanly inside orbital eye sockets */}
+      {[-0.036, 0.036].map((ex, i) => (
+        <group key={i} position={[ex, 0.017, -0.095]}>
           {/* Sclera */}
-          <mesh scale={[1.15, 0.85, 0.65]}>
-            <sphereGeometry args={[0.016, 12, 10]} />
-            <meshStandardMaterial color="#f8fafc" roughness={0.25} />
+          <mesh scale={[1.05, 0.92, 0.92]}>
+            <sphereGeometry args={[0.0145, 16, 14]} />
+            <meshPhysicalMaterial color="#f8fafc" roughness={0.14} clearcoat={0.9} clearcoatRoughness={0.08} />
           </mesh>
-          {/* Radial-fiber Iris + specular cornea gleam */}
-          <mesh position={[0, 0, -0.0075]} scale={[1, 1, 0.48]}>
-            <sphereGeometry args={[0.0086, 14, 12]} />
-            <meshStandardMaterial map={irisTex} roughness={0.12} metalness={0.05} />
+          {/* Radial Iris */}
+          <mesh position={[0, 0, -0.0085]} scale={[1, 1, 0.55]}>
+            <sphereGeometry args={[0.0076, 16, 12]} />
+            <meshPhysicalMaterial map={irisTex} roughness={0.08} clearcoat={1.0} clearcoatRoughness={0.04} />
           </mesh>
-          <mesh position={[-0.003, 0.003, -0.0112]}>
-            <sphereGeometry args={[0.0018, 6, 6]} />
+          {/* Specular Corneal Highlight */}
+          <mesh position={[-0.0025, 0.0026, -0.0128]}>
+            <sphereGeometry args={[0.0016, 6, 6]} />
             <meshBasicMaterial color="#ffffff" />
           </mesh>
-          {/* Pupil */}
-          <mesh position={[0, 0, -0.01]} scale={[1, 1, 0.4]}>
-            <sphereGeometry args={[0.0044, 8, 8]} />
+          {/* Deep Pupil */}
+          <mesh position={[0, 0, -0.0112]} scale={[1, 1, 0.45]}>
+            <sphereGeometry args={[0.0038, 10, 8]} />
             <meshBasicMaterial color="#09090b" />
           </mesh>
-          {/* Subtle upper eyelashes */}
-          {isFemale && (
-            <mesh position={[0, 0.011, -0.009]} rotation={[0.18, 0, i === 0 ? 0.12 : -0.12]}>
-              <boxGeometry args={[0.03, 0.003, 0.006]} />
-              <meshBasicMaterial color="#18181b" />
-            </mesh>
-          )}
-          {/* Eyelid */}
+          {/* Upper lash ridge */}
+          <mesh position={[0, 0.01, -0.0085]} rotation={[0.15, 0, i === 0 ? 0.1 : -0.1]}>
+            <boxGeometry args={[0.024, isFemale ? 0.003 : 0.002, 0.005]} />
+            <meshBasicMaterial color="#18181b" />
+          </mesh>
+          {/* Blinking upper eyelid conforming to orbital curve */}
           <mesh
             ref={i === 0 ? leftLidRef : rightLidRef}
-            position={[0, 0.002, -0.004]}
-            scale={[1.2, 0.05, 0.72]}
+            position={[0, 0.002, -0.0025]}
+            scale={[1.15, 0.06, 0.96]}
           >
-            <sphereGeometry args={[0.0165, 10, 8]} />
-            <meshStandardMaterial color={profile.skinShadow} roughness={0.6} />
+            <sphereGeometry args={[0.015, 12, 10]} />
+            <meshStandardMaterial color={profile.skinShadow} roughness={0.55} />
           </mesh>
         </group>
       ))}
 
-      {/* Sculpted Eyebrows */}
-      {[-0.04, 0.04].map((ex, i) => (
-        <mesh
-          key={i}
-          position={[ex, 0.042, -0.113]}
-          rotation={[0, 0, (i === 0 ? 1 : -1) * (isFemale ? 0.14 : 0.08)]}
-        >
-          <boxGeometry args={[0.034, isFemale ? 0.0055 : 0.0085, 0.012]} />
-          <meshStandardMaterial color={profile.hairColor} roughness={0.8} />
-        </mesh>
-      ))}
-
-      {/* Mouth / Sculpted Upper & Lower Lips */}
-      <mesh position={[0, -0.062, -0.111]} scale={[isFemale ? 1.25 : 1.35, isFemale ? 0.62 : 0.52, 0.65]}>
-        <sphereGeometry args={[0.018, 14, 10]} />
-        <meshStandardMaterial color={profile.lipColor} roughness={0.42} />
-      </mesh>
-      {/* Mouth line / expression */}
-      <mesh position={[0, -0.061, -0.121]}>
-        <boxGeometry args={[0.032, 0.0025, 0.004]} />
-        <meshBasicMaterial color="#4a221d" />
-      </mesh>
-
-      {/* 3D Chin & Jaw Beard (Male only) */}
-      {!isFemale && profile.hasBeard && (
-        <group>
-          <mesh position={[0, -0.072, -0.056]} scale={[0.84, 0.78, 0.82]}>
-            <sphereGeometry args={[0.088, 14, 10, 0, Math.PI * 2, Math.PI * 0.42, Math.PI * 0.58]} />
-            <meshStandardMaterial color={profile.hairColor} roughness={0.9} />
-          </mesh>
-          <mesh position={[0, -0.045, -0.118]}>
-            <boxGeometry args={[0.046, 0.009, 0.014]} />
-            <meshStandardMaterial color={profile.hairColor} roughness={0.9} />
-          </mesh>
-        </group>
-      )}
-
-      {/* Optional Athletic Sunglasses (for fielders/bowlers) */}
+      {/* Optional Athletic Sunglasses */}
       {allowSunglasses && profile.hasSunglasses && (
-        <group position={[0, 0.019, -0.122]}>
-          <mesh position={[-0.04, 0, 0]}>
-            <boxGeometry args={[0.048, 0.025, 0.01]} />
-            <meshStandardMaterial color="#0f172a" metalness={0.7} roughness={0.15} emissive="#0284c7" emissiveIntensity={0.22} />
+        <group position={[0, 0.018, -0.114]}>
+          <mesh position={[-0.036, 0, 0]}>
+            <boxGeometry args={[0.045, 0.023, 0.009]} />
+            <meshStandardMaterial color="#0f172a" metalness={0.78} roughness={0.14} emissive="#0284c7" emissiveIntensity={0.2} />
           </mesh>
-          <mesh position={[0.04, 0, 0]}>
-            <boxGeometry args={[0.048, 0.025, 0.01]} />
-            <meshStandardMaterial color="#0f172a" metalness={0.7} roughness={0.15} emissive="#0284c7" emissiveIntensity={0.22} />
+          <mesh position={[0.036, 0, 0]}>
+            <boxGeometry args={[0.045, 0.023, 0.009]} />
+            <meshStandardMaterial color="#0f172a" metalness={0.78} roughness={0.14} emissive="#0284c7" emissiveIntensity={0.2} />
           </mesh>
-          <mesh position={[0, 0.006, 0]}>
-            <boxGeometry args={[0.024, 0.006, 0.008]} />
-            <meshStandardMaterial color="#e2e8f0" metalness={0.6} />
+          <mesh position={[0, 0.005, 0]}>
+            <boxGeometry args={[0.022, 0.005, 0.007]} />
+            <meshStandardMaterial color="#e2e8f0" metalness={0.65} />
           </mesh>
         </group>
       )}
 
-      {/* Sculpted 3D Hair for Male & Female Presets */}
+      {/* Sculpted Multi-Layered 3D Strand-Textured Hair (all-angle front/back/side/top coverage!) */}
       {showHair && (
-        <group ref={hairGroupRef} position={[0, 0.032, 0.006]}>
-          <mesh scale={[isFemale ? 0.94 : 0.96, 0.96, 1.0]}>
-            <sphereGeometry args={[0.128, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.56]} />
-            <meshStandardMaterial color={profile.hairColor} roughness={0.78} />
+        <group ref={hairGroupRef} position={[0, 0.022, 0.004]}>
+          {/* Fitted cranial hair cap wrapping top, temples & occipital nape */}
+          <mesh position={[0, 0.006, 0.006]} scale={[isFemale ? 0.91 : 0.96, 1.02, 0.99]}>
+            <sphereGeometry args={[0.121, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.58]} />
+            <meshStandardMaterial map={hairTex} roughness={0.68} />
           </mesh>
-          {profile.hairStyle === 'curly' && (
-            <mesh position={[0, 0.068, -0.02]} scale={[1.05, 0.65, 1.02]}>
-              <sphereGeometry args={[0.105, 14, 10]} />
-              <meshStandardMaterial color={profile.hairColor} roughness={0.92} />
-            </mesh>
-          )}
-          {profile.hairStyle === 'short' && (
-            <mesh position={[0, 0.072, -0.035]} rotation={[-0.25, 0, 0]} scale={[1.0, 0.52, 0.95]}>
-              <sphereGeometry args={[0.095, 12, 10]} />
-              <meshStandardMaterial color={profile.hairColor} roughness={0.82} />
-            </mesh>
-          )}
-          {(profile.hairStyle === 'long' || profile.hairStyle === 'bob') && (
+          {/* Occipital back-of-head hairline coverage (clean from behind!) */}
+          <mesh position={[0, -0.045, 0.058]} rotation={[0.12, 0, 0]} scale={[isFemale ? 0.9 : 0.94, 1, 0.62]}>
+            <cylinderGeometry args={[0.098, isFemale ? 0.092 : 0.068, 0.09, 18]} />
+            <meshStandardMaterial map={hairTex} roughness={0.7} />
+          </mesh>
+
+          {profile.hairStyle === 'fade' && (
             <group>
-              {/* Back hair cape draping behind neck/shoulders */}
-              <mesh position={[0, -0.11, 0.072]} rotation={[0.14, 0, 0]} scale={[1.1, 1.0, 0.46]}>
-                <cylinderGeometry
-                  args={[0.118, profile.hairStyle === 'long' ? 0.138 : 0.122, profile.hairStyle === 'long' ? 0.34 : 0.18, 18]}
-                />
-                <meshStandardMaterial color={profile.hairColor} roughness={0.72} />
+              <mesh position={[0, 0.072, -0.028]} rotation={[-0.22, 0, 0]} scale={[0.92, 0.44, 0.92]}>
+                <sphereGeometry args={[0.088, 18, 12]} />
+                <meshStandardMaterial map={hairTex} roughness={0.65} />
               </mesh>
-              {/* Left & Right framing locks */}
-              {[-0.098, 0.098].map((hx, idx) => (
-                <mesh
-                  key={idx}
-                  position={[hx, -0.085, -0.01]}
-                  rotation={[0.08, 0, idx === 0 ? -0.12 : 0.12]}
-                >
-                  <capsuleGeometry args={[0.028, profile.hairStyle === 'long' ? 0.22 : 0.11, 6, 10]} />
-                  <meshStandardMaterial color={profile.hairColor} roughness={0.72} />
+              {[-0.04, 0, 0.04].map((xOff, k) => (
+                <mesh key={k} position={[xOff, 0.088, -0.05]} rotation={[-0.45, 0, xOff * 1.4]}>
+                  <capsuleGeometry args={[0.022, 0.045, 6, 10]} />
+                  <meshStandardMaterial map={hairTex} roughness={0.65} />
                 </mesh>
               ))}
             </group>
           )}
-          {profile.hairStyle === 'ponytail' && (
-            <group position={[0, 0.02, 0.12]}>
-              <mesh rotation={[0.85, 0, 0]}>
-                <torusGeometry args={[0.024, 0.008, 8, 16]} />
-                <meshStandardMaterial color="#f43f5e" roughness={0.45} />
+
+          {profile.hairStyle === 'curly' && (
+            <group>
+              {[
+                [0, 0.086, -0.025, 0.068],
+                [-0.055, 0.068, -0.01, 0.052],
+                [0.055, 0.068, -0.01, 0.052],
+                [0, 0.052, 0.055, 0.06],
+              ].map(([cx, cy, cz, r], idx) => (
+                <mesh key={idx} position={[cx, cy, cz]}>
+                  <sphereGeometry args={[r, 14, 12]} />
+                  <meshStandardMaterial map={hairTex} roughness={0.82} />
+                </mesh>
+              ))}
+            </group>
+          )}
+
+          {profile.hairStyle === 'short' && (
+            <mesh position={[0, 0.068, -0.032]} rotation={[-0.22, 0, 0]} scale={[0.98, 0.48, 0.94]}>
+              <sphereGeometry args={[0.094, 18, 12]} />
+              <meshStandardMaterial map={hairTex} roughness={0.7} />
+            </mesh>
+          )}
+
+          {(profile.hairStyle === 'long' || profile.hairStyle === 'bob') && (
+            <group>
+              {/* Layered curved flowing back hair cape hugging shoulders naturally */}
+              <mesh position={[0, -0.105, 0.072]} rotation={[0.14, 0, 0]} scale={[1.04, 1.0, 0.48]}>
+                <cylinderGeometry
+                  args={[0.105, profile.hairStyle === 'long' ? 0.132 : 0.115, profile.hairStyle === 'long' ? 0.31 : 0.17, 22]}
+                />
+                <meshStandardMaterial map={hairTex} roughness={0.62} />
               </mesh>
-              <mesh position={[0, -0.12, 0.06]} rotation={[-0.45, 0, 0]}>
-                <capsuleGeometry args={[0.032, 0.2, 8, 12]} />
-                <meshStandardMaterial color={profile.hairColor} roughness={0.74} />
+              {/* Side framing locks + swept front fringe */}
+              {[-0.088, 0.088].map((hx, idx) => (
+                <mesh
+                  key={idx}
+                  position={[hx, -0.078, -0.006]}
+                  rotation={[0.08, 0, idx === 0 ? -0.12 : 0.12]}
+                >
+                  <capsuleGeometry args={[0.024, profile.hairStyle === 'long' ? 0.21 : 0.11, 8, 12]} />
+                  <meshStandardMaterial map={hairTex} roughness={0.62} />
+                </mesh>
+              ))}
+              <mesh position={[0.02, 0.068, -0.065]} rotation={[0.5, 0.35, -0.2]} scale={[1.25, 0.45, 0.5]}>
+                <sphereGeometry args={[0.058, 14, 10]} />
+                <meshStandardMaterial map={hairTex} roughness={0.62} />
+              </mesh>
+            </group>
+          )}
+
+          {profile.hairStyle === 'ponytail' && (
+            <group position={[0, 0.02, 0.112]}>
+              <mesh rotation={[0.85, 0, 0]}>
+                <torusGeometry args={[0.022, 0.007, 10, 18]} />
+                <meshStandardMaterial color="#f43f5e" roughness={0.42} />
+              </mesh>
+              <mesh position={[0, -0.11, 0.055]} rotation={[-0.42, 0, 0]}>
+                <capsuleGeometry args={[0.028, 0.19, 10, 14]} />
+                <meshStandardMaterial map={hairTex} roughness={0.62} />
+              </mesh>
+              <mesh position={[0, -0.22, 0.11]} rotation={[-0.2, 0, 0]}>
+                <coneGeometry args={[0.026, 0.09, 12]} />
+                <meshStandardMaterial map={hairTex} roughness={0.62} />
               </mesh>
             </group>
           )}

@@ -79,6 +79,9 @@ export interface HandFrameAnalysis {
   valid: boolean
   palmWorldPos: [number, number, number]
   palmWorldQuat: [number, number, number, number]
+  wristWorldPos?: [number, number, number]
+  wristWorldQuat?: [number, number, number, number]
+  indexTipWorldPos?: [number, number, number]
   curls: [number, number, number, number, number] // thumb, index, middle, ring, pinky (0..1)
   pinchDist: number
   isGrabbing: boolean
@@ -203,12 +206,26 @@ export function analyzeXRHandFrame(
     _pos.applyMatrix4(originObject.matrixWorld)
     originObject.getWorldQuaternion(_originQuat)
     _quat.premultiply(_originQuat)
+    _indexTip.applyMatrix4(originObject.matrixWorld)
+  }
+
+  // Extract anatomical wrist pose for smartwatch mounting
+  const wristOffset = HAND_JOINT_INDEX['wrist'] * 16
+  _mat.fromArray(poseBuffer, wristOffset)
+  const wPos = new THREE.Vector3().setFromMatrixPosition(_mat)
+  const wQuat = new THREE.Quaternion().setFromRotationMatrix(_mat)
+  if (originObject) {
+    wPos.applyMatrix4(originObject.matrixWorld)
+    wQuat.premultiply(_originQuat)
   }
 
   return {
     valid: true,
     palmWorldPos: [_pos.x, _pos.y, _pos.z],
     palmWorldQuat: [_quat.x, _quat.y, _quat.z, _quat.w],
+    wristWorldPos: [wPos.x, wPos.y, wPos.z],
+    wristWorldQuat: [wQuat.x, wQuat.y, wQuat.z, wQuat.w],
+    indexTipWorldPos: [_indexTip.x, _indexTip.y, _indexTip.z],
     curls: [thumbCurl, indexCurl, middleCurl, ringCurl, pinkyCurl],
     pinchDist,
     isGrabbing,

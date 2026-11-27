@@ -18,16 +18,26 @@ function ensureCtx(): AudioContext | null {
   return _ctx
 }
 
+export type MaterialSfxAction =
+  | 'squeeze'
+  | 'fold'
+  | 'tear'
+  | 'cut'
+  | 'chop'
+  | 'drop'
+  | 'reject'
+  | 'watch_tap'
+  | 'pen_write'
+  | 'tester_live'
+  | 'tester_insulator'
+
 /**
- * Plays subtle procedural material feedback for squeezing, folding, tearing, impacts, or rigid knocks.
+ * Plays subtle procedural material feedback for squeezing, folding, tearing, cutting, tools, or watch taps.
  */
-export function playMaterialActionSfx(
-  kind: CraftMaterialKind,
-  action: 'squeeze' | 'fold' | 'tear' | 'drop' | 'reject'
-): void {
+export function playMaterialActionSfx(kind: CraftMaterialKind, action: MaterialSfxAction): void {
   const nowMs = performance.now()
-  if (action === 'squeeze' && nowMs - _lastPlayMs < 140) return
-  if (action === 'reject' && nowMs - _lastPlayMs < 350) return
+  if ((action === 'squeeze' || action === 'pen_write') && nowMs - _lastPlayMs < 135) return
+  if ((action === 'reject' || action === 'tester_live' || action === 'tester_insulator') && nowMs - _lastPlayMs < 320) return
   _lastPlayMs = nowMs
 
   const ctx = ensureCtx()
@@ -35,6 +45,68 @@ export function playMaterialActionSfx(
 
   const t = ctx.currentTime
   try {
+    if (action === 'watch_tap') {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(1180, t)
+      osc.frequency.exponentialRampToValueAtTime(1640, t + 0.055)
+      gain.gain.setValueAtTime(0.08, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.065)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.07)
+      return
+    }
+    if (action === 'tester_live') {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'square'
+      osc.frequency.setValueAtTime(2150, t)
+      gain.gain.setValueAtTime(0.06, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.14)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.15)
+      return
+    }
+    if (action === 'tester_insulator') {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(240, t)
+      gain.gain.setValueAtTime(0.04, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.05)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.06)
+      return
+    }
+    if (action === 'pen_write') {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'triangle'
+      osc.frequency.setValueAtTime(1450, t)
+      gain.gain.setValueAtTime(0.018, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.03)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.035)
+      return
+    }
+    if (action === 'cut' || action === 'chop') {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = action === 'chop' ? 'sawtooth' : 'triangle'
+      osc.frequency.setValueAtTime(action === 'chop' ? 195 : 460, t)
+      osc.frequency.exponentialRampToValueAtTime(action === 'chop' ? 68 : 185, t + (action === 'chop' ? 0.16 : 0.09))
+      gain.gain.setValueAtTime(action === 'chop' ? 0.16 : 0.11, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.18)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.19)
+      return
+    }
     if (kind === 'metal' || (kind === 'wood' && action === 'reject')) {
       const osc = ctx.createOscillator()
       const gain = ctx.createGain()

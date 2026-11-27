@@ -3,15 +3,8 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { AthleteLookProfile, getAthleteProfile, HumanFaceHead } from '../scene/HumanFace'
 import { TextLabel } from '../scene/TextLabel'
+import { UnityHumanoidCharacter } from '../scene/UnityHumanoidCharacter'
 import { CricketRole } from './types'
-
-const _shoulder = new THREE.Vector3()
-const _wrist = new THREE.Vector3()
-const _elbow = new THREE.Vector3()
-const _dir = new THREE.Vector3()
-const _mid = new THREE.Vector3()
-const _up = new THREE.Vector3(0, 1, 0)
-const _quat = new THREE.Quaternion()
 
 export interface KitAnimState {
   runPhase: number
@@ -285,34 +278,11 @@ export function CricketHelmetMesh({
   )
 }
 
-function updateLimbSegment(
-  mesh: THREE.Mesh | null,
-  a: THREE.Vector3,
-  b: THREE.Vector3,
-  radius: number
-): void {
-  if (!mesh) return
-  _dir.subVectors(b, a)
-  const len = _dir.length()
-  if (len < 0.01) {
-    mesh.visible = false
-    return
-  }
-  mesh.visible = true
-  _mid.addVectors(a, b).multiplyScalar(0.5)
-  _dir.divideScalar(len)
-  _quat.setFromUnitVectors(_up, _dir)
-  mesh.position.copy(_mid)
-  mesh.quaternion.copy(_quat)
-  mesh.scale.set(radius, len, radius)
-}
-
 /**
- * Full sculpted athletic Cricket Player Body with:
- * - Realistic HumanFaceHead (3D eyes/blink, nose, lips, ears, hair, optional beard/sunglasses)
- * - Tailored Jersey Torso (Name + Squad Number on BOTH Front & Back)
- * - Short-sleeve team sleeves + real skin-toned muscular forearms
- * - Articulated animated Legs (Hip -> Thigh -> Knee -> Shin -> Cleats) + Knee-Roll Leg Pads
+ * Full sculpted Unity-3D-like Rigged Humanoid Cricket Player Body with:
+ * - Continuous SkinnedMesh Athlete Silhouette + VRIK Arms (wearing team jersey + cricket whites)
+ * - Sculpted HumanFaceHead + Cricket Helmet or Cap
+ * - Front & Back Jersey Name + Squad Number + Batting/Keeper Leg Pads
  */
 export function CricketKitBody({
   role,
@@ -339,18 +309,13 @@ export function CricketKitBody({
   getAnimState?: () => KitAnimState
   hideHead?: boolean
 }) {
-  const bodyGroupRef = useRef<THREE.Group>(null)
-  const upperBodyRef = useRef<THREE.Group>(null)
-  const headRef = useRef<THREE.Group>(null)
-  const leftHipRef = useRef<THREE.Group>(null)
-  const leftKneeRef = useRef<THREE.Group>(null)
-  const rightHipRef = useRef<THREE.Group>(null)
-  const rightKneeRef = useRef<THREE.Group>(null)
-
-  const leftUpperRef = useRef<THREE.Mesh>(null)
-  const leftForeRef = useRef<THREE.Mesh>(null)
-  const rightUpperRef = useRef<THREE.Mesh>(null)
-  const rightForeRef = useRef<THREE.Mesh>(null)
+  const overlayGroupRef = useRef<THREE.Group>(null)
+  const upperBadgeRef = useRef<THREE.Group>(null)
+  const headCapRef = useRef<THREE.Group>(null)
+  const leftPadHipRef = useRef<THREE.Group>(null)
+  const rightPadHipRef = useRef<THREE.Group>(null)
+  const leftPadKneeRef = useRef<THREE.Group>(null)
+  const rightPadKneeRef = useRef<THREE.Group>(null)
 
   const profile = useMemo(
     () => lookProfile ?? getAthleteProfile(playerName || role),
@@ -370,99 +335,86 @@ export function CricketKitBody({
       diveTilt: 0,
     }
 
-    // Running stride angles + squat drop
-    const stride = Math.sin(anim.runPhase) * 0.68 * anim.runSpeed
-    const squatHip = anim.squat * 0.52
-    const squatKnee = anim.squat * 0.95
-    const pelvisDrop = anim.squat * 0.18 + Math.abs(Math.sin(anim.runPhase)) * 0.03 * anim.runSpeed
+    const stride = Math.sin(anim.runPhase) * 0.56 * anim.runSpeed
+    const pelvisDrop = anim.squat * 0.28 + Math.abs(Math.sin(anim.runPhase)) * 0.022 * anim.runSpeed
     const spread = anim.stanceSpread ?? 0
     const frontStride = anim.frontStride ?? 0
     const twist = anim.torsoTwist ?? 0
+    const sitHip = anim.squat * 0.68
+    const sitKnee = -anim.squat * 1.05
 
-    if (bodyGroupRef.current) {
-      bodyGroupRef.current.position.set(pos[0], pos[1] - pelvisDrop * 0.35, pos[2])
-      bodyGroupRef.current.rotation.set(0, yaw, 0)
+    if (overlayGroupRef.current) {
+      overlayGroupRef.current.position.set(pos[0], pos[1], pos[2])
+      overlayGroupRef.current.rotation.set(0, yaw, 0)
     }
 
-    if (upperBodyRef.current) {
-      upperBodyRef.current.rotation.set(-(anim.torsoLean + anim.diveTilt * 0.7), twist, 0)
+    if (upperBadgeRef.current) {
+      upperBadgeRef.current.position.set(0, 0.88 - pelvisDrop, 0)
+      upperBadgeRef.current.rotation.set(anim.torsoLean + anim.diveTilt * 0.7, twist, 0)
     }
 
-    if (headRef.current) {
-      headRef.current.rotation.y = (anim.headYawOffset ?? 0) - twist * 0.75
+    if (headCapRef.current) {
+      headCapRef.current.rotation.y = anim.headYawOffset ?? 0
     }
 
-    // Left & Right Leg articulation (supports both running and wide sideways batting stance)
-    if (leftHipRef.current && leftKneeRef.current) {
-      leftHipRef.current.rotation.set(stride + squatHip, 0, -(spread + Math.max(0, -frontStride)))
-      leftKneeRef.current.rotation.set(-Math.max(0, -stride * 1.1) - squatKnee, 0, spread * 0.45)
+    if (leftPadHipRef.current && leftPadKneeRef.current) {
+      leftPadHipRef.current.position.set(-0.098, 0.85 - pelvisDrop, 0)
+      leftPadHipRef.current.rotation.set(stride + sitHip, 0, -(spread + Math.max(0, -frontStride)))
+      leftPadKneeRef.current.rotation.set(-Math.max(0, -stride * 1.1) + sitKnee, 0, spread * 0.35)
     }
-    if (rightHipRef.current && rightKneeRef.current) {
-      rightHipRef.current.rotation.set(-stride + squatHip, 0, spread + Math.max(0, frontStride))
-      rightKneeRef.current.rotation.set(-Math.max(0, stride * 1.1) - squatKnee, 0, -spread * 0.45)
+    if (rightPadHipRef.current && rightPadKneeRef.current) {
+      rightPadHipRef.current.position.set(0.098, 0.85 - pelvisDrop, 0)
+      rightPadHipRef.current.rotation.set(-stride + sitHip, 0, spread + Math.max(0, frontStride))
+      rightPadKneeRef.current.rotation.set(-Math.max(0, stride * 1.1) + sitKnee, 0, -spread * 0.35)
     }
-
-    // Arm kinematics connecting athletic shoulders to live wrists
-    const computeArm = (
-      sideSign: number,
-      wristArr: [number, number, number],
-      upperMesh: THREE.Mesh | null,
-      foreMesh: THREE.Mesh | null
-    ) => {
-      const effYaw = yaw + twist
-      const cosY = Math.cos(effYaw)
-      const sinY = Math.sin(effYaw)
-      const localSX = sideSign * 0.225
-      const localSY = 1.36 - pelvisDrop * 0.45
-      _shoulder.set(pos[0] + localSX * cosY, pos[1] + localSY, pos[2] - localSX * sinY)
-      _wrist.set(wristArr[0], wristArr[1], wristArr[2])
-
-      _elbow.lerpVectors(_shoulder, _wrist, 0.48)
-      _elbow.y -= 0.1
-      _elbow.x += sideSign * cosY * 0.06
-      _elbow.z -= sideSign * sinY * 0.06
-
-      updateLimbSegment(upperMesh, _shoulder, _elbow, 0.052) // Jersey short sleeve
-      updateLimbSegment(foreMesh, _elbow, _wrist, 0.038) // Skin-toned forearm
-    }
-
-    computeArm(-1, getLeftWrist(), leftUpperRef.current, leftForeRef.current)
-    computeArm(1, getRightWrist(), rightUpperRef.current, rightForeRef.current)
   })
 
   return (
     <group>
-      <group ref={bodyGroupRef}>
-        {/* Upper Body (leans naturally when batting/keeping/diving) */}
-        <group ref={upperBodyRef} position={[0, 0.88, 0]}>
-          {/* Athletic Tapered V-Shaped Jersey Torso */}
-          <mesh position={[0, 0.27, 0]} scale={[1.26, 1, 0.78]}>
-            <cylinderGeometry args={[0.165, 0.135, 0.52, 16]} />
-            <meshStandardMaterial color={jerseyColor} roughness={0.62} />
-          </mesh>
-          {/* Team Accent Chest & Shoulder Stripes */}
-          <mesh position={[0, 0.36, 0]} scale={[1.28, 1, 0.8]}>
-            <cylinderGeometry args={[0.168, 0.16, 0.09, 16]} />
-            <meshStandardMaterial color={accentColor} roughness={0.55} />
-          </mesh>
-          {/* Shoulder Deltoid Caps */}
-          {[-0.205, 0.205].map((sx, i) => (
-            <mesh key={i} position={[sx, 0.47, 0]} scale={[1, 0.9, 0.95]}>
-              <sphereGeometry args={[0.068, 12, 10]} />
-              <meshStandardMaterial color={jerseyColor} roughness={0.6} />
-            </mesh>
-          ))}
-          {/* V-Neck Jersey Collar */}
-          <mesh position={[0, 0.53, 0]}>
-            <cylinderGeometry args={[0.088, 0.098, 0.045, 14]} />
-            <meshStandardMaterial color="#f8fafc" roughness={0.55} />
-          </mesh>
+      <UnityHumanoidCharacter
+        seedKey={playerName || role}
+        gender="male"
+        outfitColor={jerseyColor}
+        accentColor={accentColor}
+        pantsColor="#f8fafc"
+        shoeColor={role === 'bowler' ? '#38bdf8' : '#ffffff'}
+        uniformStyle="cricket"
+        lookProfile={profile}
+        hideHead
+        getBodyAnchor={() => {
+          const { pos, yaw } = getBodyAnchor()
+          const anim = getAnimState?.() ?? {
+            runPhase: 0,
+            runSpeed: 0,
+            squat: role === 'wicketkeeper' ? 0.65 : role === 'batter' ? 0.16 : 0,
+            torsoLean: role === 'wicketkeeper' ? 0.25 : 0.05,
+            diveTilt: 0,
+          }
+          return {
+            pos,
+            yaw,
+            walkSpeed: anim.runSpeed,
+            walkPhase: anim.runPhase,
+            squat: anim.squat,
+            torsoPitch: anim.torsoLean + anim.diveTilt * 0.7,
+            torsoTwist: anim.torsoTwist ?? 0,
+            headYaw: anim.headYawOffset ?? 0,
+            stanceSpread: anim.stanceSpread ?? 0,
+            frontStride: anim.frontStride ?? 0,
+          }
+        }}
+        getLeftWrist={getLeftWrist}
+        getRightWrist={getRightWrist}
+      />
 
-          {/* FRONT JERSEY NAME & NUMBER (-Z front chest) */}
+      {/* Synchronized Cricket Gear Overlay (Front/Back Jersey Numbers, Helmet/Cap, Batting Leg Pads) */}
+      <group ref={overlayGroupRef}>
+        <group ref={upperBadgeRef} position={[0, 0.88, 0]}>
+          {/* Front Jersey Name & Number (-Z front chest) */}
           <TextLabel
-            position={[0, 0.38, -0.138]}
+            position={[0, 0.38, -0.142]}
             rotation={[0, Math.PI, 0]}
-            fontSize={0.056}
+            fontSize={0.052}
             color="#f8fafc"
             outlineColor="#020617"
             outlineWidth={0.006}
@@ -470,9 +422,9 @@ export function CricketKitBody({
             {cleanName}
           </TextLabel>
           <TextLabel
-            position={[0, 0.23, -0.128]}
+            position={[0, 0.24, -0.132]}
             rotation={[0, Math.PI, 0]}
-            fontSize={0.105}
+            fontSize={0.098}
             color={accentColor}
             outlineColor="#020617"
             outlineWidth={0.008}
@@ -480,11 +432,11 @@ export function CricketKitBody({
             {jerseyNumber}
           </TextLabel>
 
-          {/* BACK JERSEY NAME & NUMBER (+Z upper back) */}
+          {/* Back Jersey Name & Number (+Z upper back) */}
           <TextLabel
-            position={[0, 0.39, 0.138]}
+            position={[0, 0.39, 0.132]}
             rotation={[0, 0, 0]}
-            fontSize={0.064}
+            fontSize={0.06}
             color="#f8fafc"
             outlineColor="#020617"
             outlineWidth={0.006}
@@ -492,9 +444,9 @@ export function CricketKitBody({
             {cleanName}
           </TextLabel>
           <TextLabel
-            position={[0, 0.21, 0.128]}
+            position={[0, 0.22, 0.125]}
             rotation={[0, 0, 0]}
-            fontSize={0.135}
+            fontSize={0.125}
             color={accentColor}
             outlineColor="#020617"
             outlineWidth={0.008}
@@ -502,21 +454,21 @@ export function CricketKitBody({
             {jerseyNumber}
           </TextLabel>
 
-          {/* Realistic Human Face Head + Helmet or Cap */}
           {!hideHead && (
-            <group ref={headRef} position={[0, 0.72, 0]}>
+            <group ref={headCapRef} position={[0, 0.66, 0]}>
               <HumanFaceHead
                 profile={profile}
                 showHair={role === 'bowler'}
                 allowSunglasses={role === 'bowler'}
+                hideNeck
               />
               {role === 'bowler' ? (
                 <group position={[0, 0.058, 0]}>
                   <mesh scale={[1.01, 0.9, 1.04]}>
-                    <sphereGeometry args={[0.132, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.5]} />
+                    <sphereGeometry args={[0.13, 16, 10, 0, Math.PI * 2, 0, Math.PI * 0.5]} />
                     <meshStandardMaterial color={jerseyColor} roughness={0.5} />
                   </mesh>
-                  <mesh position={[0, -0.005, -0.138]} rotation={[0.15, 0, 0]}>
+                  <mesh position={[0, -0.005, -0.136]} rotation={[0.15, 0, 0]}>
                     <boxGeometry args={[0.17, 0.014, 0.09]} />
                     <meshStandardMaterial color={jerseyColor} roughness={0.5} />
                   </mesh>
@@ -528,91 +480,38 @@ export function CricketKitBody({
           )}
         </group>
 
-        {/* Pelvis / Waist Belt */}
-        <mesh position={[0, 0.87, 0]} scale={[1.22, 1, 0.78]}>
-          <cylinderGeometry args={[0.135, 0.14, 0.12, 14]} />
-          <meshStandardMaterial color="#f8fafc" roughness={0.68} />
-        </mesh>
-
-        {/* Left & Right Articulated Legs (Hip -> Knee -> Ankle -> Cleats + Sculpted Pads) */}
-        {[
-          { sideX: -0.1, hipRef: leftHipRef, kneeRef: leftKneeRef },
-          { sideX: 0.1, hipRef: rightHipRef, kneeRef: rightKneeRef },
-        ].map(({ sideX, hipRef, kneeRef }, idx) => (
-          <group key={idx} ref={hipRef} position={[sideX, 0.84, 0]}>
-            {/* Thigh */}
-            <mesh position={[0, -0.2, 0]}>
-              <cylinderGeometry args={[0.072, 0.058, 0.4, 12]} />
-              <meshStandardMaterial color="#f8fafc" roughness={0.68} />
-            </mesh>
-            {/* Knee Joint & Lower Leg */}
-            <group ref={kneeRef} position={[0, -0.4, 0]}>
-              <mesh>
-                <sphereGeometry args={[0.056, 10, 8]} />
-                <meshStandardMaterial color="#f1f5f9" roughness={0.68} />
-              </mesh>
-              <mesh position={[0, -0.19, 0]}>
-                <cylinderGeometry args={[0.056, 0.044, 0.38, 12]} />
-                <meshStandardMaterial color="#f8fafc" roughness={0.68} />
-              </mesh>
-
-              {/* Sculpted Pro Cricket Leg Pad (3 vertical bolsters + knee roll + straps) */}
-              {hasPads && (
-                <group position={[0, -0.16, -0.048]}>
-                  {[-0.036, 0, 0.036].map((bx, bi) => (
-                    <mesh key={bi} position={[bx, 0, 0]}>
-                      <cylinderGeometry args={[0.022, 0.02, 0.44, 8]} />
-                      <meshStandardMaterial color="#ffffff" roughness={0.38} />
+        {hasPads && (
+          <>
+            {[
+              { hipRef: leftPadHipRef, kneeRef: leftPadKneeRef, x: -0.098 },
+              { hipRef: rightPadHipRef, kneeRef: rightPadKneeRef, x: 0.098 },
+            ].map(({ hipRef, kneeRef, x }, idx) => (
+              <group key={idx} ref={hipRef} position={[x, 0.85, 0]}>
+                <group ref={kneeRef} position={[0, -0.41, 0]}>
+                  <group position={[0, -0.17, -0.054]}>
+                    {[-0.036, 0, 0.036].map((bx, bi) => (
+                      <mesh key={bi} position={[bx, 0, 0]}>
+                        <cylinderGeometry args={[0.022, 0.02, 0.44, 8]} />
+                        <meshStandardMaterial color="#ffffff" roughness={0.38} />
+                      </mesh>
+                    ))}
+                    <mesh position={[0, 0.22, -0.005]}>
+                      <boxGeometry args={[0.125, 0.085, 0.055]} />
+                      <meshStandardMaterial color={jerseyColor} roughness={0.45} />
                     </mesh>
-                  ))}
-                  {/* Top knee roll guard */}
-                  <mesh position={[0, 0.22, -0.005]}>
-                    <boxGeometry args={[0.125, 0.085, 0.055]} />
-                    <meshStandardMaterial color={jerseyColor} roughness={0.45} />
-                  </mesh>
-                  {/* Buckle straps around calf */}
-                  {[-0.12, 0.08].map((sy, si) => (
-                    <mesh key={si} position={[0, sy, 0.042]}>
-                      <cylinderGeometry args={[0.058, 0.058, 0.022, 12]} />
-                      <meshStandardMaterial color="#e2e8f0" roughness={0.55} />
-                    </mesh>
-                  ))}
+                    {[-0.12, 0.08].map((sy, si) => (
+                      <mesh key={si} position={[0, sy, 0.044]}>
+                        <cylinderGeometry args={[0.06, 0.06, 0.022, 12]} />
+                        <meshStandardMaterial color="#e2e8f0" roughness={0.55} />
+                      </mesh>
+                    ))}
+                  </group>
                 </group>
-              )}
-
-              {/* Athletic Cricket Shoe */}
-              <group position={[0, -0.4, -0.04]}>
-                <mesh>
-                  <boxGeometry args={[0.092, 0.075, 0.22]} />
-                  <meshStandardMaterial color={role === 'bowler' ? '#38bdf8' : '#ffffff'} roughness={0.45} />
-                </mesh>
-                <mesh position={[0, -0.035, 0]}>
-                  <boxGeometry args={[0.095, 0.016, 0.225]} />
-                  <meshStandardMaterial color="#0f172a" roughness={0.8} />
-                </mesh>
               </group>
-            </group>
-          </group>
-        ))}
+            ))}
+          </>
+        )}
       </group>
-
-      {/* Team Jersey Short Sleeves (Upper Arm) + Skin-Toned Forearms */}
-      <mesh ref={leftUpperRef}>
-        <cylinderGeometry args={[1, 0.88, 1, 12]} />
-        <meshStandardMaterial color={jerseyColor} roughness={0.6} />
-      </mesh>
-      <mesh ref={leftForeRef}>
-        <cylinderGeometry args={[1, 0.8, 1, 12]} />
-        <meshStandardMaterial color={profile.skinColor} roughness={0.62} />
-      </mesh>
-      <mesh ref={rightUpperRef}>
-        <cylinderGeometry args={[1, 0.88, 1, 12]} />
-        <meshStandardMaterial color={jerseyColor} roughness={0.6} />
-      </mesh>
-      <mesh ref={rightForeRef}>
-        <cylinderGeometry args={[1, 0.8, 1, 12]} />
-        <meshStandardMaterial color={profile.skinColor} roughness={0.62} />
-      </mesh>
     </group>
   )
 }

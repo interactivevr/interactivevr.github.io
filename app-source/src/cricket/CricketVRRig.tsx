@@ -15,6 +15,7 @@ import { segmentSphereIntersects } from '../physics/ballPhysics'
 import { analyzeXRHandFrame, XR_HAND_JOINTS } from '../physics/handGesture'
 import { ArticulatedHand } from '../scene/ArticulatedHand'
 import { getAthleteProfile } from '../scene/HumanFace'
+import { UnityLocalVRCharacter } from '../scene/UnityLocalVRCharacter'
 import { runtimeState, useGameStore } from '../store/useGameStore'
 import { HandSide } from '../types/game'
 import { isXRControllerButtonPressed, pulseXRControllerHaptics } from '../xr/controllerButtons'
@@ -503,6 +504,15 @@ export function CricketVRRig() {
           <ArticulatedHand side="right" isGrabbingRef={grabStateRef} />
         )}
       </XROrigin>
+
+      {/* Unity 3D VR Character First-Person Cricket Player Body */}
+      <UnityLocalVRCharacter
+        uniformStyle="cricket"
+        outfitColor={jerseyColor}
+        pantsColor="#f8fafc"
+        shoeColor="#ffffff"
+        hideHands
+      />
 
       {/* Unobstructed First-Person Gloves & MRF Cricket Bat */}
       <group ref={leftHandGroupRef}>

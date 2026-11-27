@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { createCraftMeshData, encodeDeformOffsets, RuntimeCraftMeshData } from './craftEngine'
+import { applyQuantizedDeform, createCraftMeshData, encodeDeformOffsets, RuntimeCraftMeshData } from './craftEngine'
 import {
   ClayShapePreset,
   CraftDeformNetPayload,
@@ -7,16 +7,20 @@ import {
   CraftObjectNetState,
   CraftShapePreset,
   getDefaultColorForKind,
+  InkStroke2D,
   MAX_ROOM_CRAFT_OBJECTS,
   MyRoomOpponentMode,
   MyRoomToolMode,
   PaperShapePreset,
   RoomSurfaceCollider,
+  WristToolKind,
 } from './types'
 
 export interface RuntimeCraftObject extends CraftObjectNetState {
   meshData: RuntimeCraftMeshData
   foldFactor: number
+  strokes: InkStroke2D[]
+  strokeVersion: number
   dirtyNetwork: boolean
   isHeldByLocal: boolean
 }
@@ -55,6 +59,15 @@ export const myRoomRuntime = {
   surfaces: [] as RoomSurfaceCollider[],
   floorY: 0,
   roomBoundsXZ: { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 },
+  leftWristPose: {
+    pos: [-0.22, 1.15, -0.35] as [number, number, number],
+    quat: [0, 0, 0, 1] as [number, number, number, number],
+    valid: false,
+  },
+  rightIndexTip: {
+    pos: [0.22, 1.15, -0.35] as [number, number, number],
+    valid: false,
+  },
   ai: {
     pos: [0, 0, -0.95] as [number, number, number],
     yaw: 0,
@@ -111,6 +124,7 @@ export function spawnRuntimeCraftObject(opts: {
   tearGeneration?: number
   deformQ?: number[]
   deformSeed?: number
+  strokes?: InkStroke2D[]
   broadcast?: boolean
 }): RuntimeCraftObject {
   // Enforce object count cap cleanly by removing oldest unlocked piece if needed
@@ -130,6 +144,9 @@ export function spawnRuntimeCraftObject(opts: {
     opts.deformQ && opts.deformQ.length === meshData.currPositions.length
       ? [...opts.deformQ]
       : encodeDeformOffsets(meshData.restPositions, meshData.currPositions)
+  if (opts.deformQ && opts.deformQ.length === meshData.currPositions.length) {
+    applyQuantizedDeform(meshData, deformQ)
+  }
 
   const runtimeObj: RuntimeCraftObject = {
     id,
@@ -148,6 +165,8 @@ export function spawnRuntimeCraftObject(opts: {
     tearGeneration: opts.tearGeneration ?? 0,
     deformQ,
     deformSeed,
+    strokes: opts.strokes ? opts.strokes.map((s) => ({ color: s.color, points: s.points.map((p) => [p[0], p[1]]) })) : [],
+    strokeVersion: 0,
     timestamp: Date.now(),
     meshData,
     dirtyNetwork: false,
@@ -203,6 +222,7 @@ export function stripToNetState(obj: RuntimeCraftObject): CraftObjectNetState {
     tearGeneration: obj.tearGeneration,
     deformQ: [...obj.deformQ],
     deformSeed: obj.deformSeed,
+    strokes: obj.strokes.map((s) => ({ color: s.color, points: s.points.map((p) => [p[0], p[1]]) })),
     timestamp: obj.timestamp,
   }
 }
@@ -213,6 +233,12 @@ export interface MyRoomStoreState {
   selectedPaperPreset: PaperShapePreset
   selectedColor: string
   toolMode: MyRoomToolMode
+  activeTool: WristToolKind
+  watchMenuOpen: boolean
+  activeInkColor: string
+  testerReadout: string
+  testerIsLive: boolean
+  showSelfBody: boolean
   opponentMode: MyRoomOpponentMode
   showRoomMesh: boolean
   scannedSurfaceCount: number
@@ -225,6 +251,11 @@ export interface MyRoomStoreState {
   setSelectedPaperPreset: (preset: PaperShapePreset) => void
   setSelectedColor: (color: string) => void
   setToolMode: (mode: MyRoomToolMode) => void
+  setActiveTool: (tool: WristToolKind) => void
+  setWatchMenuOpen: (open: boolean) => void
+  setActiveInkColor: (color: string) => void
+  setTesterState: (readout: string, isLive: boolean) => void
+  setShowSelfBody: (show: boolean) => void
   setOpponentMode: (mode: MyRoomOpponentMode) => void
   setShowRoomMesh: (show: boolean) => void
   setScannedSurfaceCount: (count: number) => void
@@ -239,12 +270,18 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
   selectedPaperPreset: 'sheet',
   selectedColor: getDefaultColorForKind('clay'),
   toolMode: 'sculpt-grab',
+  activeTool: 'none',
+  watchMenuOpen: true,
+  activeInkColor: '#1e3a8a',
+  testerReadout: 'READY',
+  testerIsLive: false,
+  showSelfBody: true,
   opponentMode: 'auto',
   showRoomMesh: false,
   scannedSurfaceCount: 0,
   objectCount: 0,
   objectListVersion: 0,
-  statusHint: 'Scan room surfaces & pinch/squeeze clay or paper with your palms',
+  statusHint: 'Tap Left Wrist Watch for Pen/Knife/Axe/Tester • Stack Wood Plates & Metal!',
 
   setSelectedKind: (selectedKind) =>
     set({
@@ -255,6 +292,11 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
   setSelectedPaperPreset: (selectedPaperPreset) => set({ selectedPaperPreset }),
   setSelectedColor: (selectedColor) => set({ selectedColor }),
   setToolMode: (toolMode) => set({ toolMode }),
+  setActiveTool: (activeTool) => set({ activeTool }),
+  setWatchMenuOpen: (watchMenuOpen) => set({ watchMenuOpen }),
+  setActiveInkColor: (activeInkColor) => set({ activeInkColor }),
+  setTesterState: (testerReadout, testerIsLive) => set({ testerReadout, testerIsLive }),
+  setShowSelfBody: (showSelfBody) => set({ showSelfBody }),
   setOpponentMode: (opponentMode) => set({ opponentMode }),
   setShowRoomMesh: (showRoomMesh) => set({ showRoomMesh }),
   setScannedSurfaceCount: (scannedSurfaceCount) => set({ scannedSurfaceCount }),
@@ -283,7 +325,10 @@ export const useMyRoomStore = create<MyRoomStoreState>((set) => ({
       objectCount: 0,
       objectListVersion: s.objectListVersion + 1,
       scannedSurfaceCount: 0,
-      statusHint: 'Room ready — create Clay or Paper objects to sculpt & hand to companion',
+      activeTool: 'none',
+      testerReadout: 'READY',
+      testerIsLive: false,
+      statusHint: 'Room ready — tap Left Watch for Pen/Knife/Axe/Tester or build with Wood & Metal',
     }))
   },
 }))

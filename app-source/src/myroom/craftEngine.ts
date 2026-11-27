@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import { CraftMaterialKind, CraftShapePreset, MATERIAL_PHYSICS, MAX_TEAR_GENERATION } from './types'
 
-export const DEFORM_QUANT_RANGE = 0.24
+export const DEFORM_QUANT_RANGE = 0.26
 
 export interface RuntimeCraftMeshData {
   geometry: THREE.BufferGeometry
@@ -9,6 +9,9 @@ export interface RuntimeCraftMeshData {
   currPositions: Float32Array
   vertexCount: number
   approxRadius: number
+  halfExtents: [number, number, number]
+  localCenter: [number, number, number]
+  restVolume: number
 }
 
 function createSeededNoise(seed: number, idx: number): number {
@@ -17,7 +20,103 @@ function createSeededNoise(seed: number, idx: number): number {
 }
 
 /**
- * Builds subdivided 3D geometry tailored to Paper, Cloth, Artificial Clay, Wood, or Metal.
+ * Computes tight local bounding half-extents & centroid offset directly from current vertex positions
+ * so stacked/cut/folded objects rest flush against each other without passing through.
+ */
+export function computeLocalMeshBounds(positions: Float32Array): {
+  halfExtents: [number, number, number]
+  localCenter: [number, number, number]
+  approxRadius: number
+} {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i]
+    const y = positions[i + 1]
+    const z = positions[i + 2]
+    if (x < minX) minX = x
+    if (x > maxX) maxX = x
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+    if (z < minZ) minZ = z
+    if (z > maxZ) maxZ = z
+  }
+
+  if (!Number.isFinite(minX)) {
+    return {
+      halfExtents: [0.05, 0.05, 0.05],
+      localCenter: [0, 0, 0],
+      approxRadius: 0.08,
+    }
+  }
+
+  const hx = Math.max(0.012, (maxX - minX) * 0.5)
+  const hy = Math.max(0.01, (maxY - minY) * 0.5)
+  const hz = Math.max(0.012, (maxZ - minZ) * 0.5)
+  const cx = (minX + maxX) * 0.5
+  const cy = (minY + maxY) * 0.5
+  const cz = (minZ + maxZ) * 0.5
+
+  return {
+    halfExtents: [hx, hy, hz],
+    localCenter: [cx, cy, cz],
+    approxRadius: Math.hypot(hx, hy, hz) * 0.72,
+  }
+}
+
+/**
+ * Exact signed tetrahedral mesh volume relative to vertex centroid for watertight closed meshes (Clay solids).
+ */
+export function computeSignedMeshVolume(geometry: THREE.BufferGeometry, positions: Float32Array): number {
+  const index = geometry.getIndex()
+  const vertCount = Math.floor(positions.length / 3)
+  if (!index || vertCount < 4) return 0
+
+  let cx = 0
+  let cy = 0
+  let cz = 0
+  for (let i = 0; i < positions.length; i += 3) {
+    cx += positions[i]
+    cy += positions[i + 1]
+    cz += positions[i + 2]
+  }
+  cx /= vertCount
+  cy /= vertCount
+  cz /= vertCount
+
+  const idxArr = index.array
+  let vol6 = 0
+  for (let t = 0; t < idxArr.length; t += 3) {
+    const a = idxArr[t] * 3
+    const b = idxArr[t + 1] * 3
+    const c = idxArr[t + 2] * 3
+
+    const ax = positions[a] - cx
+    const ay = positions[a + 1] - cy
+    const az = positions[a + 2] - cz
+    const bx = positions[b] - cx
+    const by = positions[b + 1] - cy
+    const bz = positions[b + 2] - cz
+    const dx = positions[c] - cx
+    const dy = positions[c + 1] - cy
+    const dz = positions[c + 2] - cz
+
+    const crossX = by * dz - bz * dy
+    const crossY = bz * dx - bx * dz
+    const crossZ = bx * dy - by * dx
+    vol6 += ax * crossX + ay * crossY + az * crossZ
+  }
+
+  return Math.abs(vol6) / 6
+}
+
+/**
+ * Builds subdivided 3D geometry tailored to Paper, Cloth, Artificial Clay, Wood (including thin wide Plates), or Metal.
  */
 export function createCraftMeshData(
   kind: CraftMaterialKind,
@@ -32,46 +131,52 @@ export function createCraftMeshData(
     const w = (preset === 'card' ? 0.2 : 0.28) * scale
     const h = (preset === 'card' ? 0.26 : 0.36) * scale
     baseGeo = new THREE.PlaneGeometry(w, h, 12, 16)
-    baseGeo.rotateX(-Math.PI * 0.32)
+    baseGeo.rotateX(-Math.PI * 0.44)
     const pAttr = baseGeo.getAttribute('position') as THREE.BufferAttribute
     for (let i = 0; i < pAttr.count; i++) {
       const px = pAttr.getX(i)
-      pAttr.setY(i, pAttr.getY(i) + Math.cos((px / w) * Math.PI) * 0.015 * scale)
+      pAttr.setY(i, pAttr.getY(i) + Math.cos((px / w) * Math.PI) * 0.008 * scale)
     }
-    approxRadius = Math.max(w, h) * 0.55
+    approxRadius = Math.max(w, h) * 0.54
   } else if (kind === 'cloth') {
     const w = (preset === 'towel' ? 0.28 : 0.34) * scale
     const h = (preset === 'towel' ? 0.44 : 0.34) * scale
     baseGeo = new THREE.PlaneGeometry(w, h, 14, 14)
-    baseGeo.rotateX(-Math.PI * 0.38)
-    // Natural soft textile wave drape
+    baseGeo.rotateX(-Math.PI * 0.42)
     const pAttr = baseGeo.getAttribute('position') as THREE.BufferAttribute
     for (let i = 0; i < pAttr.count; i++) {
       const px = pAttr.getX(i)
       const pz = pAttr.getZ(i)
-      pAttr.setY(i, pAttr.getY(i) + Math.sin(px * 18 + pz * 10) * 0.014 * scale)
+      pAttr.setY(i, pAttr.getY(i) + Math.sin(px * 18 + pz * 10) * 0.012 * scale)
     }
     approxRadius = Math.max(w, h) * 0.52
   } else if (kind === 'wood') {
-    if (preset === 'plank') {
-      baseGeo = new THREE.BoxGeometry(0.28 * scale, 0.045 * scale, 0.14 * scale, 2, 1, 2)
-      approxRadius = 0.15 * scale
+    if (preset === 'plate') {
+      // Thin, wide structural wood plate / board for decks, bridges, roofs, & multi-layer builds
+      baseGeo = new THREE.BoxGeometry(0.46 * scale, 0.024 * scale, 0.32 * scale, 3, 1, 3)
+      approxRadius = 0.24 * scale
+    } else if (preset === 'plank') {
+      baseGeo = new THREE.BoxGeometry(0.3 * scale, 0.045 * scale, 0.12 * scale, 2, 1, 2)
+      approxRadius = 0.16 * scale
     } else if (preset === 'cylinder') {
-      baseGeo = new THREE.CylinderGeometry(0.062 * scale, 0.062 * scale, 0.24 * scale, 18, 2)
+      baseGeo = new THREE.CylinderGeometry(0.058 * scale, 0.058 * scale, 0.24 * scale, 18, 2)
       approxRadius = 0.125 * scale
     } else {
       baseGeo = new THREE.BoxGeometry(0.14 * scale, 0.14 * scale, 0.14 * scale, 2, 2, 2)
       approxRadius = 0.105 * scale
     }
   } else if (kind === 'metal') {
-    if (preset === 'cylinder') {
-      baseGeo = new THREE.CylinderGeometry(0.056 * scale, 0.056 * scale, 0.2 * scale, 20, 2)
-      approxRadius = 0.11 * scale
+    if (preset === 'plate' || preset === 'plank') {
+      baseGeo = new THREE.BoxGeometry(0.36 * scale, 0.024 * scale, 0.16 * scale, 2, 1, 2)
+      approxRadius = 0.19 * scale
+    } else if (preset === 'cylinder') {
+      baseGeo = new THREE.CylinderGeometry(0.054 * scale, 0.054 * scale, 0.22 * scale, 20, 2)
+      approxRadius = 0.115 * scale
     } else if (preset === 'sphere') {
       baseGeo = new THREE.SphereGeometry(0.088 * scale, 20, 16)
       approxRadius = 0.092 * scale
     } else {
-      baseGeo = new THREE.BoxGeometry(0.16 * scale, 0.085 * scale, 0.11 * scale, 2, 2, 2)
+      baseGeo = new THREE.BoxGeometry(0.16 * scale, 0.09 * scale, 0.11 * scale, 2, 2, 2)
       approxRadius = 0.105 * scale
     }
   } else if (preset === 'cylinder') {
@@ -81,7 +186,7 @@ export function createCraftMeshData(
     baseGeo = new THREE.BoxGeometry(0.155 * scale, 0.155 * scale, 0.155 * scale, 7, 7, 7)
     approxRadius = 0.115 * scale
   } else {
-    baseGeo = new THREE.SphereGeometry(0.106 * scale, 18, 14)
+    baseGeo = new THREE.SphereGeometry(0.108 * scale, 18, 14)
     approxRadius = 0.11 * scale
   }
 
@@ -92,7 +197,7 @@ export function createCraftMeshData(
       const x = posAttr.getX(i)
       const y = posAttr.getY(i)
       const z = posAttr.getZ(i)
-      const wobble = 1 + createSeededNoise(seed, i) * 0.04
+      const wobble = 1 + createSeededNoise(seed, i) * 0.035
       restPositions[i * 3] = x * wobble
       restPositions[i * 3 + 1] = y * wobble
       restPositions[i * 3 + 2] = z * wobble
@@ -104,14 +209,26 @@ export function createCraftMeshData(
 
   const currPositions = new Float32Array(restPositions)
   baseGeo.computeVertexNormals()
+  const bounds = computeLocalMeshBounds(currPositions)
+  const restVolume = kind === 'clay' ? computeSignedMeshVolume(baseGeo, restPositions) : 0
 
   return {
     geometry: baseGeo,
     restPositions,
     currPositions,
     vertexCount: posAttr.count,
-    approxRadius,
+    approxRadius: Math.max(approxRadius, bounds.approxRadius),
+    halfExtents: bounds.halfExtents,
+    localCenter: bounds.localCenter,
+    restVolume,
   }
+}
+
+export function refreshMeshDerivedData(meshData: RuntimeCraftMeshData): void {
+  const bounds = computeLocalMeshBounds(meshData.currPositions)
+  meshData.halfExtents = bounds.halfExtents
+  meshData.localCenter = bounds.localCenter
+  meshData.approxRadius = Math.max(0.04, bounds.approxRadius)
 }
 
 const _invQuat = new THREE.Quaternion()
@@ -120,8 +237,88 @@ const _localNorm = new THREE.Vector3()
 const _delta = new THREE.Vector3()
 
 /**
- * Squeezes / crumples / compresses malleable objects (Clay, Paper, Cloth).
- * Rigid solids (Wood, Metal) explicitly reject squeezing.
+ * Enforces volume conservation on Clay by expanding orthogonal axes around centroid
+ * whenever local palm pressure compresses along one axis, followed by exact tetrahedral volume lock.
+ */
+function enforceClayVolumePreservation(
+  meshData: RuntimeCraftMeshData,
+  pressAxisLocal: THREE.Vector3
+): void {
+  const { restPositions, currPositions, vertexCount, geometry, restVolume } = meshData
+  if (restVolume <= 1e-8 || vertexCount < 4) return
+
+  const curVol = computeSignedMeshVolume(geometry, currPositions)
+  if (curVol <= 1e-8) return
+
+  let cx = 0
+  let cy = 0
+  let cz = 0
+  for (let i = 0; i < vertexCount; i++) {
+    const i3 = i * 3
+    cx += currPositions[i3]
+    cy += currPositions[i3 + 1]
+    cz += currPositions[i3 + 2]
+  }
+  cx /= vertexCount
+  cy /= vertexCount
+  cz /= vertexCount
+
+  // First pass: compensate lost thickness purely by flaring orthogonal (pancake) axes so pressed face stays indented!
+  const ratio = restVolume / curVol
+  const perpScale = Math.max(0.92, Math.min(1.24, Math.sqrt(ratio)))
+  for (let i = 0; i < vertexCount; i++) {
+    const i3 = i * 3
+    const dx = currPositions[i3] - cx
+    const dy = currPositions[i3 + 1] - cy
+    const dz = currPositions[i3 + 2] - cz
+    const proj = dx * pressAxisLocal.x + dy * pressAxisLocal.y + dz * pressAxisLocal.z
+    const ax = pressAxisLocal.x * proj
+    const ay = pressAxisLocal.y * proj
+    const az = pressAxisLocal.z * proj
+    const px = dx - ax
+    const py = dy - ay
+    const pz = dz - az
+
+    const nx = cx + ax + px * perpScale
+    const ny = cy + ay + py * perpScale
+    const nz = cz + az + pz * perpScale
+
+    currPositions[i3] =
+      restPositions[i3] + Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, nx - restPositions[i3]))
+    currPositions[i3 + 1] =
+      restPositions[i3 + 1] +
+      Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, ny - restPositions[i3 + 1]))
+    currPositions[i3 + 2] =
+      restPositions[i3 + 2] +
+      Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, nz - restPositions[i3 + 2]))
+  }
+
+  // Second pass: uniform isotropic trim so exact final volume equals restVolume even under repeated squashes
+  const volAfterPerp = computeSignedMeshVolume(geometry, currPositions)
+  if (volAfterPerp > 1e-8) {
+    const uniScale = Math.max(0.9, Math.min(1.18, Math.cbrt(restVolume / volAfterPerp)))
+    if (Math.abs(uniScale - 1) > 0.002) {
+      for (let i = 0; i < vertexCount; i++) {
+        const i3 = i * 3
+        const nx = cx + (currPositions[i3] - cx) * uniScale
+        const ny = cy + (currPositions[i3 + 1] - cy) * uniScale
+        const nz = cz + (currPositions[i3 + 2] - cz) * uniScale
+        currPositions[i3] =
+          restPositions[i3] + Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, nx - restPositions[i3]))
+        currPositions[i3 + 1] =
+          restPositions[i3 + 1] +
+          Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, ny - restPositions[i3 + 1]))
+        currPositions[i3 + 2] =
+          restPositions[i3 + 2] +
+          Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, nz - restPositions[i3 + 2]))
+      }
+    }
+  }
+}
+
+/**
+ * Squeezes / reshapes Clay (volume-preserving) or soft Cloth.
+ * Paper (only fold enabled), Wood, and Metal explicitly do NOT squeeze.
  */
 export function squeezeCraftWithPalm(
   meshData: RuntimeCraftMeshData,
@@ -136,7 +333,11 @@ export function squeezeCraftWithPalm(
   dt: number
 ): { dirty: boolean; nextCrumple: number; rejectedRigid?: boolean } {
   if (!MATERIAL_PHYSICS[kind].canSqueeze) {
-    return { dirty: false, nextCrumple: currentCrumple, rejectedRigid: true }
+    return {
+      dirty: false,
+      nextCrumple: currentCrumple,
+      rejectedRigid: kind === 'wood' || kind === 'metal',
+    }
   }
 
   const clampDt = Math.min(dt, 0.05)
@@ -159,52 +360,63 @@ export function squeezeCraftWithPalm(
   let nextCrumple = currentCrumple
 
   if (kind === 'clay') {
-    // True tactile squash: compresses whole contact face inward while flaring perpendicular dimensions smoothly!
-    const squashRate = Math.min(0.45, clampDt * (1.2 + strength * 2.1))
-    const bulgeGain = squashRate * 0.56
-    const localBrushR = Math.max(0.11, approxRadius * 1.45)
+    const squashRate = Math.min(0.36, clampDt * (1.1 + strength * 1.9))
+    const localBrushR = Math.max(0.11, approxRadius * 1.55)
+
+    let cx = 0
+    let cy = 0
+    let cz = 0
+    for (let i = 0; i < vertexCount; i++) {
+      const i3 = i * 3
+      cx += currPositions[i3]
+      cy += currPositions[i3 + 1]
+      cz += currPositions[i3 + 2]
+    }
+    cx /= vertexCount
+    cy /= vertexCount
+    cz /= vertexCount
 
     for (let i = 0; i < vertexCount; i++) {
       const i3 = i * 3
       const rx = restPositions[i3]
       const ry = restPositions[i3 + 1]
       const rz = restPositions[i3 + 2]
-      const cx = currPositions[i3]
-      const cy = currPositions[i3 + 1]
-      const cz = currPositions[i3 + 2]
+      const vx = currPositions[i3] - cx
+      const vy = currPositions[i3 + 1] - cy
+      const vz = currPositions[i3 + 2] - cz
 
-      const dToPalm = Math.hypot(cx - _localPalm.x, cy - _localPalm.y, cz - _localPalm.z)
+      const dToPalm = Math.hypot(currPositions[i3] - _localPalm.x, currPositions[i3 + 1] - _localPalm.y, currPositions[i3 + 2] - _localPalm.z)
       if (dToPalm >= localBrushR) continue
 
-      const weight = 0.35 + 0.65 * Math.cos((dToPalm / localBrushR) * Math.PI * 0.5)
-
-      // Project vertex onto palm squeeze axis _localNorm (compress toward plane z=0 -> flatten!)
-      const proj = cx * _localNorm.x + cy * _localNorm.y + cz * _localNorm.z
+      const weight = 0.38 + 0.62 * Math.cos((dToPalm / localBrushR) * Math.PI * 0.5)
+      const proj = vx * _localNorm.x + vy * _localNorm.y + vz * _localNorm.z
       const pxComp = _localNorm.x * proj
       const pyComp = _localNorm.y * proj
       const pzComp = _localNorm.z * proj
+      const perpX = vx - pxComp
+      const perpY = vy - pyComp
+      const perpZ = vz - pzComp
 
-      // Orthogonal radial vector in the pancake plane flares outward proportionally
-      const perpX = cx - pxComp
-      const perpY = cy - pyComp
-      const perpZ = cz - pzComp
+      // Compress along press axis while pre-flaring orthogonal axes inversely
+      const compFactor = Math.max(0.55, 1 - squashRate * weight)
+      const preFlare = 1 / Math.sqrt(compFactor)
 
-      const compFactor = 1 - squashRate * weight
-      const flareFactor = 1 + bulgeGain * weight
-
-      const nextX = pxComp * compFactor + perpX * flareFactor
-      const nextY = pyComp * compFactor + perpY * flareFactor
-      const nextZ = pzComp * compFactor + perpZ * flareFactor
+      const nextX = cx + pxComp * compFactor + perpX * preFlare
+      const nextY = cy + pyComp * compFactor + perpY * preFlare
+      const nextZ = cz + pzComp * compFactor + perpZ * preFlare
 
       currPositions[i3] = rx + Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, nextX - rx))
       currPositions[i3 + 1] = ry + Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, nextY - ry))
       currPositions[i3 + 2] = rz + Math.max(-DEFORM_QUANT_RANGE, Math.min(DEFORM_QUANT_RANGE, nextZ - rz))
       dirty = true
     }
-  } else {
-    // Paper & Cloth Squeeze/Crumple: paper gets sharp angular origami ridges; cloth gets soft bunched folds!
-    const isCloth = kind === 'cloth'
-    nextCrumple = Math.min(1, currentCrumple + clampDt * (isCloth ? 1.45 : 1.75) * (0.4 + strength * 0.8))
+
+    if (dirty) {
+      enforceClayVolumePreservation(meshData, _localNorm)
+    }
+  } else if (kind === 'cloth') {
+    // Soft fabric bunching / squeezing
+    nextCrumple = Math.min(1, currentCrumple + clampDt * 1.45 * (0.4 + strength * 0.8))
     if (Math.abs(nextCrumple - currentCrumple) > 0.002) {
       for (let i = 0; i < vertexCount; i++) {
         const i3 = i * 3
@@ -212,12 +424,11 @@ export function squeezeCraftWithPalm(
         const ry = restPositions[i3 + 1]
         const rz = restPositions[i3 + 2]
 
-        const shrink = 1 - nextCrumple * (isCloth ? 0.6 : 0.7)
-        const waveFreq = isCloth ? 16 : 36
-        const amp = (isCloth ? 0.038 : 0.032) * nextCrumple
-        const ridgeA = Math.sin(rx * waveFreq + seed * 3.1 + rz * 14) * amp
-        const ridgeB = Math.cos(rz * (waveFreq + 4) - rx * 18 + seed * 5.7) * amp
-        const creaseY = (isCloth ? Math.sin(rx * 22 + rz * 20 + seed) : Math.sin(i * 1.9 + seed)) * amp
+        const shrink = 1 - nextCrumple * 0.58
+        const amp = 0.036 * nextCrumple
+        const ridgeA = Math.sin(rx * 16 + seed * 3.1 + rz * 14) * amp
+        const ridgeB = Math.cos(rz * 20 - rx * 18 + seed * 5.7) * amp
+        const creaseY = Math.sin(rx * 22 + rz * 20 + seed) * amp
 
         const tx = rx * shrink + ridgeA
         const ty = ry * shrink + creaseY + ridgeB * 0.65
@@ -233,12 +444,13 @@ export function squeezeCraftWithPalm(
 
   if (dirty) {
     syncGeometryPositions(geometry, currPositions)
+    refreshMeshDerivedData(meshData)
   }
   return { dirty, nextCrumple }
 }
 
 /**
- * Folds Paper or Cloth neatly along the central hinge axis between both hands (foldFactor 0..1 -> up to 172deg!).
+ * Folds Paper or Cloth neatly along the central hinge axis (foldFactor 0..1 -> up to 172deg).
  */
 export function foldCraftWithHands(
   meshData: RuntimeCraftMeshData,
@@ -268,12 +480,10 @@ export function foldCraftWithHands(
   pullAxisWorld.normalize()
 
   const foldAcross = _localNorm.copy(pullAxisWorld).applyQuaternion(_invQuat).normalize()
-  // Hinge axis orthogonal to foldAcross & Y in sheet plane
   const hingeAxis = new THREE.Vector3(0, 1, 0).cross(foldAcross)
   if (hingeAxis.lengthSq() < 1e-4) hingeAxis.set(0, 0, 1)
   hingeAxis.normalize()
 
-  // Fold angle up to 170 degrees (both sides fold gently inward like closing a book / towel!)
   const halfAngle = nextFold * Math.PI * 0.47
   const qPos = new THREE.Quaternion().setFromAxisAngle(hingeAxis, halfAngle)
   const qNeg = new THREE.Quaternion().setFromAxisAngle(hingeAxis, -halfAngle)
@@ -297,12 +507,13 @@ export function foldCraftWithHands(
   }
 
   syncGeometryPositions(geometry, currPositions)
+  refreshMeshDerivedData(meshData)
   return { dirty: true, nextFold }
 }
 
 /**
  * Splits deformed vertex offsets along a tear plane between left and right hands
- * for tearable materials (Clay, Paper, Cloth). Wood & Metal reject tearing.
+ * for tearable materials (Clay, Paper, Cloth). Wood & Metal reject hand tearing.
  */
 export function computeTearSplitDeforms(
   meshData: RuntimeCraftMeshData,
@@ -380,8 +591,169 @@ export function computeTearSplitDeforms(
     rightDeformQ: encodeDeformOffsets(restPositions, rightVerts),
     leftOffsetWorld: [-dirWorldX * shiftDist, -dirWorldY * shiftDist, -dirWorldZ * shiftDist],
     rightOffsetWorld: [dirWorldX * shiftDist, dirWorldY * shiftDist, dirWorldZ * shiftDist],
-    childScale: kind === 'paper' || kind === 'cloth' ? 0.88 : 0.82,
+    childScale: kind === 'paper' || kind === 'cloth' ? 0.88 : 0.85,
   }
+}
+
+/**
+ * Clean planar tool cut (Knife / Axe) that splits Wood, Clay, Paper, or Cloth cleanly along the blade plane
+ * without jagged tearing. Metal resists knife/axe cutting.
+ */
+export function computeBladeCutDeforms(
+  meshData: RuntimeCraftMeshData,
+  kind: CraftMaterialKind,
+  objPos: [number, number, number],
+  objQuat: [number, number, number, number],
+  cutPointWorld: [number, number, number],
+  bladeNormalWorld: [number, number, number],
+  tearGeneration: number
+): {
+  canCut: boolean
+  leftDeformQ: number[]
+  rightDeformQ: number[]
+  leftOffsetWorld: [number, number, number]
+  rightOffsetWorld: [number, number, number]
+  childScale: number
+} {
+  if (kind === 'metal' || tearGeneration >= MAX_TEAR_GENERATION) {
+    return {
+      canCut: false,
+      leftDeformQ: [],
+      rightDeformQ: [],
+      leftOffsetWorld: [0, 0, 0],
+      rightOffsetWorld: [0, 0, 0],
+      childScale: 1,
+    }
+  }
+
+  _invQuat.set(objQuat[0], objQuat[1], objQuat[2], objQuat[3]).invert()
+  const normW = new THREE.Vector3(bladeNormalWorld[0], bladeNormalWorld[1], bladeNormalWorld[2])
+  if (normW.lengthSq() < 1e-4) normW.set(1, 0, 0)
+  normW.normalize()
+
+  const localCutPt = _localPalm
+    .set(cutPointWorld[0] - objPos[0], cutPointWorld[1] - objPos[1], cutPointWorld[2] - objPos[2])
+    .applyQuaternion(_invQuat)
+  const localNorm = _localNorm.copy(normW).applyQuaternion(_invQuat).normalize()
+
+  const { restPositions, currPositions, vertexCount } = meshData
+
+  let minP = Infinity
+  let maxP = -Infinity
+  let sumP = 0
+  for (let i = 0; i < vertexCount; i++) {
+    const i3 = i * 3
+    const p =
+      currPositions[i3] * localNorm.x +
+      currPositions[i3 + 1] * localNorm.y +
+      currPositions[i3 + 2] * localNorm.z
+    if (p < minP) minP = p
+    if (p > maxP) maxP = p
+    sumP += p
+  }
+  const midP = sumP / Math.max(1, vertexCount)
+  const rawCutOffset =
+    localCutPt.x * localNorm.x + localCutPt.y * localNorm.y + localCutPt.z * localNorm.z
+  // Keep cut within middle 60% of piece span so neither cut piece is a sliver
+  const span = Math.max(0.02, maxP - minP)
+  const cutOffset = Math.max(minP + span * 0.25, Math.min(maxP - span * 0.25, Number.isFinite(rawCutOffset) ? rawCutOffset : midP))
+
+  const leftVerts = new Float32Array(currPositions)
+  const rightVerts = new Float32Array(currPositions)
+
+  for (let i = 0; i < vertexCount; i++) {
+    const i3 = i * 3
+    const vx = currPositions[i3]
+    const vy = currPositions[i3 + 1]
+    const vz = currPositions[i3 + 2]
+    const proj = vx * localNorm.x + vy * localNorm.y + vz * localNorm.z
+
+    if (proj > cutOffset) {
+      const pull = proj - cutOffset
+      leftVerts[i3] = vx - localNorm.x * pull
+      leftVerts[i3 + 1] = vy - localNorm.y * pull
+      leftVerts[i3 + 2] = vz - localNorm.z * pull
+    }
+    if (proj < cutOffset) {
+      const pull = cutOffset - proj
+      rightVerts[i3] = vx + localNorm.x * pull
+      rightVerts[i3 + 1] = vy + localNorm.y * pull
+      rightVerts[i3 + 2] = vz + localNorm.z * pull
+    }
+  }
+
+  const shiftDist = Math.max(0.055, meshData.approxRadius * 0.42)
+  return {
+    canCut: true,
+    leftDeformQ: encodeDeformOffsets(restPositions, leftVerts),
+    rightDeformQ: encodeDeformOffsets(restPositions, rightVerts),
+    leftOffsetWorld: [-normW.x * shiftDist, -normW.y * shiftDist, -normW.z * shiftDist],
+    rightOffsetWorld: [normW.x * shiftDist, normW.y * shiftDist, normW.z * shiftDist],
+    childScale: kind === 'wood' ? 0.94 : 0.9,
+  }
+}
+
+const _tipLocal = new THREE.Vector3()
+const _triA = new THREE.Vector3()
+const _triB = new THREE.Vector3()
+const _triC = new THREE.Vector3()
+const _closestPt = new THREE.Vector3()
+const _tri = new THREE.Triangle()
+const _bary = new THREE.Vector3()
+
+/**
+ * Projects a world-space Pen nib point onto a Paper object's nearest UV surface coordinates [0..1].
+ */
+export function projectWorldTipOntoPaperUV(
+  meshData: RuntimeCraftMeshData,
+  objPos: [number, number, number],
+  objQuat: [number, number, number, number],
+  tipWorldPos: [number, number, number],
+  maxDist = 0.036
+): { hit: boolean; uv: [number, number]; dist: number } {
+  const index = meshData.geometry.getIndex()
+  const uvAttr = meshData.geometry.getAttribute('uv') as THREE.BufferAttribute | undefined
+  if (!index || !uvAttr) {
+    return { hit: false, uv: [0.5, 0.5], dist: Infinity }
+  }
+
+  _invQuat.set(objQuat[0], objQuat[1], objQuat[2], objQuat[3]).invert()
+  _tipLocal
+    .set(tipWorldPos[0] - objPos[0], tipWorldPos[1] - objPos[1], tipWorldPos[2] - objPos[2])
+    .applyQuaternion(_invQuat)
+
+  const pos = meshData.currPositions
+  const idxArr = index.array
+  let bestDistSq = maxDist * maxDist
+  let bestU = 0.5
+  let bestV = 0.5
+  let hit = false
+
+  for (let t = 0; t < idxArr.length; t += 3) {
+    const ia = idxArr[t]
+    const ib = idxArr[t + 1]
+    const ic = idxArr[t + 2]
+    _triA.set(pos[ia * 3], pos[ia * 3 + 1], pos[ia * 3 + 2])
+    _triB.set(pos[ib * 3], pos[ib * 3 + 1], pos[ib * 3 + 2])
+    _triC.set(pos[ic * 3], pos[ic * 3 + 1], pos[ic * 3 + 2])
+
+    _tri.set(_triA, _triB, _triC)
+    _tri.closestPointToPoint(_tipLocal, _closestPt)
+    const dSq = _closestPt.distanceToSquared(_tipLocal)
+    if (dSq < bestDistSq) {
+      bestDistSq = dSq
+      _tri.getBarycoord(_closestPt, _bary)
+      const u =
+        uvAttr.getX(ia) * _bary.x + uvAttr.getX(ib) * _bary.y + uvAttr.getX(ic) * _bary.z
+      const v =
+        uvAttr.getY(ia) * _bary.x + uvAttr.getY(ib) * _bary.y + uvAttr.getY(ic) * _bary.z
+      bestU = Math.max(0.01, Math.min(0.99, u))
+      bestV = Math.max(0.01, Math.min(0.99, v))
+      hit = true
+    }
+  }
+
+  return { hit, uv: [bestU, bestV], dist: Math.sqrt(bestDistSq) }
 }
 
 export function encodeDeformOffsets(restPositions: Float32Array, currPositions: Float32Array): number[] {
@@ -401,6 +773,7 @@ export function applyQuantizedDeform(meshData: RuntimeCraftMeshData, deformQ: nu
     currPositions[i] = restPositions[i] + (deformQ[i] / 127) * DEFORM_QUANT_RANGE
   }
   syncGeometryPositions(geometry, currPositions)
+  refreshMeshDerivedData(meshData)
 }
 
 export function syncGeometryPositions(geometry: THREE.BufferGeometry, currPositions: Float32Array): void {

@@ -21,7 +21,7 @@ import {
 } from './useMyRoomStore'
 
 const AI_MOVE_SPEED = 1.15
-export const MIN_BODY_SEPARATION = 0.68
+export const MIN_BODY_SEPARATION = 0.48
 const _headQuat = new THREE.Quaternion()
 const _userFwd = new THREE.Vector3()
 let _lastNetBroadcastSec = 0
@@ -249,9 +249,15 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   const userInteractingWithBody =
     ai.heldHandByUser !== null || ai.hairPullTarget !== null || ai.touchedShoulderSide !== null
 
-  // 3. Determine navigation target cleanly inside walls & furniture (pull-to-me swiftly brings AI closest to user!)
-  let goalX = userHead[0] + _userFwd.x * (ai.pullToUserActive ? 0.92 : 1.02)
-  let goalZ = userHead[2] + _userFwd.z * (ai.pullToUserActive ? 0.92 : 1.02)
+  // 3. Stationary 360-degree inspectable stance when idle:
+  // Companion does NOT spin or chase user look direction, letting user freely walk around front/back/left/right/top/bottom!
+  // Moves ONLY when actively pulled (pullToUserActive) or collecting a gifted object!
+  let goalX = ai.pos[0]
+  let goalZ = ai.pos[2]
+  if (ai.pullToUserActive) {
+    goalX = userHead[0] + _userFwd.x * 0.92
+    goalZ = userHead[2] + _userFwd.z * 0.92
+  }
 
   const giftObj = ai.targetObjId ? myRoomRuntime.objects.get(ai.targetObjId) : null
   if (!ai.pullToUserActive && giftObj && ai.actionMode === 'collect') {
@@ -261,8 +267,10 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     const dLen = Math.hypot(dirX, dirZ) || 1
     goalX = giftObj.pos[0] + (dirX / dLen) * 0.48
     goalZ = giftObj.pos[2] + (dirZ / dLen) * 0.48
-  } else {
+  } else if (ai.pullToUserActive) {
     ai.lookTarget = [...userHead]
+  } else {
+    ai.lookTarget = null
   }
 
   ;[goalX, goalZ] = steerClearOfFurniture(goalX, goalZ, surfaces, floorY)
@@ -289,10 +297,7 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
       ai.walkPhase += cDt * 8.5
     }
     ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 8.0)
-  } else if (userInteractingWithBody || distToGoal < 0.24 || ai.sitBlend > 0.65) {
-    ai.isWalking = false
-    ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 6.5)
-  } else {
+  } else if (ai.actionMode === 'collect' && giftObj && distToGoal > 0.24 && !userInteractingWithBody && ai.sitBlend <= 0.65) {
     const moveStep = Math.min(distToGoal, AI_MOVE_SPEED * cDt)
     let nextX = ai.pos[0] + (dx / distToGoal) * moveStep
     let nextZ = ai.pos[2] + (dz / distToGoal) * moveStep
@@ -302,7 +307,11 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     ai.pos[2] = nextZ
     ai.isWalking = true
     ai.walkPhase += cDt * 6.2
-    ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 5.0)
+    const faceGiftYaw = Math.atan2(-(giftObj.pos[0] - ai.pos[0]), -(giftObj.pos[2] - ai.pos[2]))
+    ai.yaw += normalizeAngleDelta(faceGiftYaw, ai.yaw) * Math.min(1, cDt * 5.0)
+  } else {
+    // Hold steady orientation so player can walk around & inspect all 360° angles seamlessly
+    ai.isWalking = false
   }
 
   // Smooth spring decay for head & torso tactile reactions
