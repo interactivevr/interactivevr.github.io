@@ -1,7 +1,6 @@
 import { useFrame } from '@react-three/fiber'
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
-import { TextLabel } from '../scene/TextLabel'
 import { stepStumpsAndBails } from './cricketPhysics'
 import {
   BATTING_CREASE_Z,
@@ -120,7 +119,11 @@ function InstancedStadiumCrowd() {
   )
 }
 
-function StadiumScoreboard() {
+/**
+ * Classic real-world Black & White Cricket Scoreboard rendered via high-DPI CanvasTexture.
+ * Mounted both on the main stadium gantry and angled field-side boards for easy VR readability.
+ */
+function BlackWhiteScoreboard() {
   const runs = useCricketStore((s) => s.runs)
   const wickets = useCricketStore((s) => s.wickets)
   const legalBalls = useCricketStore((s) => s.legalBalls)
@@ -128,35 +131,141 @@ function StadiumScoreboard() {
   const pitchMode = useCricketStore((s) => s.pitchMode)
   const bowlingStyle = useCricketStore((s) => s.bowlingStyle)
   const targetScore = useCricketStore((s) => s.targetScore)
+  const inningsNumber = useCricketStore((s) => s.inningsNumber)
+  const recentBalls = useCricketStore((s) => s.recentBalls)
+  const eventBanner = useCricketStore((s) => s.eventBanner)
 
   const oversStr = `${Math.floor(legalBalls / 6)}.${legalBalls % 6}`
   const maxOversStr = format === '1-over' ? '1.0' : '10.0'
+  const runRate = legalBalls > 0 ? ((runs / legalBalls) * 6).toFixed(2) : '0.00'
+
+  const boardTex = useMemo(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1024
+    canvas.height = 512
+    const ctx = canvas.getContext('2d')!
+
+    // Authentic Matte Black Board & Crisp White Borders
+    ctx.fillStyle = '#080808'
+    ctx.fillRect(0, 0, 1024, 512)
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth = 10
+    ctx.strokeRect(14, 14, 996, 484)
+
+    ctx.lineWidth = 3
+    ctx.strokeRect(30, 88, 964, 240)
+    ctx.beginPath()
+    ctx.moveTo(512, 88)
+    ctx.lineTo(512, 328)
+    ctx.stroke()
+
+    // Header
+    ctx.fillStyle = '#ffffff'
+    ctx.font = 'bold 34px "Courier New", monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText(
+      `CRICKET SCOREBOARD  |  INNINGS ${inningsNumber}  |  ${format.toUpperCase()}`,
+      512,
+      62
+    )
+
+    // Left Box: TOTAL
+    ctx.font = 'bold 30px "Courier New", monospace'
+    ctx.fillText('TOTAL / WICKETS', 271, 134)
+    ctx.font = 'bold 124px "Courier New", monospace'
+    ctx.fillText(`${String(runs).padStart(3, '0')} - ${wickets}`, 271, 248)
+    ctx.font = 'bold 26px "Courier New", monospace'
+    ctx.fillText(
+      targetScore !== null ? `TARGET: ${targetScore}  (NEED ${Math.max(0, targetScore - runs)})` : `RUN RATE: ${runRate}`,
+      271,
+      305
+    )
+
+    // Right Box: OVERS & CONDITIONS
+    ctx.font = 'bold 30px "Courier New", monospace'
+    ctx.fillText('OVERS', 753, 134)
+    ctx.font = 'bold 114px "Courier New", monospace'
+    ctx.fillText(`${oversStr}/${maxOversStr}`, 753, 244)
+    ctx.font = 'bold 26px "Courier New", monospace'
+    ctx.fillText(
+      `PITCH: ${pitchMode.toUpperCase()}  |  BOWL: ${bowlingStyle.toUpperCase()}`,
+      753,
+      305
+    )
+
+    // Bottom Strip: THIS OVER & STATUS
+    const ballsText = recentBalls.slice(-6).join('  ') || 'READY TO PLAY'
+    ctx.font = 'bold 30px "Courier New", monospace'
+    ctx.fillText(`RECENT: [ ${ballsText} ]`, 512, 386)
+    ctx.font = 'bold 34px Arial, sans-serif'
+    ctx.fillText(eventBanner || 'LIVE MATCH', 512, 448)
+
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.colorSpace = THREE.SRGBColorSpace
+    tex.needsUpdate = true
+    return tex
+  }, [
+    runs,
+    wickets,
+    oversStr,
+    maxOversStr,
+    runRate,
+    format,
+    pitchMode,
+    bowlingStyle,
+    targetScore,
+    inningsNumber,
+    recentBalls,
+    eventBanner,
+  ])
+
+  useEffect(() => () => boardTex.dispose(), [boardTex])
 
   return (
-    <group position={[0, 12.8, -(BOUNDARY_RZ + 7.2)]}>
-      <mesh>
-        <boxGeometry args={[18, 6.2, 0.6]} />
-        <meshStandardMaterial color="#0f172a" roughness={0.5} />
-      </mesh>
-      <mesh position={[0, 0, 0.35]}>
-        <planeGeometry args={[17.2, 5.5]} />
-        <meshBasicMaterial color="#071126" />
-      </mesh>
-      <TextLabel position={[0, 1.85, 0.45]} fontSize={0.72} color="#38bdf8">
-        {`CRICKET ARENA • ${format.toUpperCase()} MATCH • ${pitchMode.toUpperCase()} PITCH`}
-      </TextLabel>
-      <TextLabel position={[-4.2, 0.05, 0.45]} fontSize={1.45} color="#34d399">
-        {`${runs} / ${wickets}`}
-      </TextLabel>
-      <TextLabel position={[-4.2, -1.55, 0.45]} fontSize={0.52} color="#94a3b8">
-        RUNS / WICKETS
-      </TextLabel>
-      <TextLabel position={[4.2, 0.05, 0.45]} fontSize={1.35} color="#fbbf24">
-        {`${oversStr} / ${maxOversStr}`}
-      </TextLabel>
-      <TextLabel position={[4.2, -1.55, 0.45]} fontSize={0.52} color="#94a3b8">
-        {targetScore !== null ? `TARGET ${targetScore} • ${bowlingStyle.toUpperCase()}` : `OVERS • ${bowlingStyle.toUpperCase()} BOWLER`}
-      </TextLabel>
+    <group>
+      {/* 1. Grand Stadium Black & White Scoreboard above sightscreen */}
+      <group position={[0, 12.6, -(BOUNDARY_RZ + 7.2)]}>
+        <mesh>
+          <boxGeometry args={[18.8, 9.6, 0.6]} />
+          <meshStandardMaterial color="#0a0a0a" roughness={0.6} />
+        </mesh>
+        <mesh position={[0, 0, 0.34]}>
+          <planeGeometry args={[18.2, 9.1]} />
+          <meshBasicMaterial map={boardTex} toneMapped={false} />
+        </mesh>
+      </group>
+
+      {/* 2. Pitch-Side Black & White VR Scoreboard (visible directly in VR from Batter, Bowler & Keeper!) */}
+      <group position={[11.2, 3.6, -16.2]} rotation={[0, -0.45, 0]}>
+        <mesh position={[0, -1.8, -0.15]}>
+          <cylinderGeometry args={[0.14, 0.18, 4.2, 10]} />
+          <meshStandardMaterial color="#18181b" />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[7.2, 3.7, 0.26]} />
+          <meshStandardMaterial color="#0a0a0a" roughness={0.6} />
+        </mesh>
+        <mesh position={[0, 0, 0.15]}>
+          <planeGeometry args={[6.9, 3.45]} />
+          <meshBasicMaterial map={boardTex} toneMapped={false} />
+        </mesh>
+      </group>
+
+      {/* 3. Bowler's View Black & White VR Scoreboard behind batting end */}
+      <group position={[-11.8, 3.6, 17.8]} rotation={[0, Math.PI - 0.45, 0]}>
+        <mesh position={[0, -1.8, -0.15]}>
+          <cylinderGeometry args={[0.14, 0.18, 4.2, 10]} />
+          <meshStandardMaterial color="#18181b" />
+        </mesh>
+        <mesh>
+          <boxGeometry args={[7.2, 3.7, 0.26]} />
+          <meshStandardMaterial color="#0a0a0a" roughness={0.6} />
+        </mesh>
+        <mesh position={[0, 0, 0.15]}>
+          <planeGeometry args={[6.9, 3.45]} />
+          <meshBasicMaterial map={boardTex} toneMapped={false} />
+        </mesh>
+      </group>
     </group>
   )
 }
@@ -169,7 +278,7 @@ export function StadiumEnvironment() {
     <group>
       {/* Crisp daylight stadium sky & lighting */}
       <color attach="background" args={['#60a5fa']} />
-      <fog attach="fog" args={['#93c5fd', 55, 135]} />
+      <fog attach="fog" args={['#93c5fd', 55, 145]} />
       <hemisphereLight args={['#eff6ff', '#166534', 1.15]} />
       <directionalLight position={[22, 38, 18]} intensity={1.65} color="#fffbeb" />
       <directionalLight position={[-18, 24, -22]} intensity={0.6} color="#bae6fd" />
@@ -224,7 +333,6 @@ export function StadiumEnvironment() {
           <meshBasicMaterial color="#ffffff" />
         </mesh>
       ))}
-      {/* Wide guidelines */}
       {[-1.32, 1.32].map((wx, idx) => (
         <group key={idx}>
           <mesh rotation={[-Math.PI / 2, 0, 0]} position={[wx, 0.02, (BATTING_CREASE_Z + BATTING_STUMPS_Z) / 2]}>
@@ -242,7 +350,7 @@ export function StadiumEnvironment() {
       <StumpsSet z={BATTING_STUMPS_Z} animated />
       <StumpsSet z={BOWLING_STUMPS_Z} />
 
-      {/* White Sightscreen behind Bowler's End so incoming red ball pops sharply in VR */}
+      {/* White Sightscreen behind Bowler's End */}
       <group position={[0, 3.2, -24.5]}>
         <mesh>
           <boxGeometry args={[10.5, 5.8, 0.35]} />
@@ -260,11 +368,7 @@ export function StadiumEnvironment() {
         const x = Math.cos(a) * (BOUNDARY_RX + 2.4)
         const z = Math.sin(a) * (BOUNDARY_RZ + 2.4)
         return (
-          <mesh
-            key={i}
-            position={[x, 0.65, z]}
-            rotation={[0, Math.atan2(-x, -z), 0]}
-          >
+          <mesh key={i} position={[x, 0.65, z]} rotation={[0, Math.atan2(-x, -z), 0]}>
             <boxGeometry args={[10.2, 1.2, 0.35]} />
             <meshStandardMaterial color={i % 2 === 0 ? '#1e3a8a' : '#0f172a'} roughness={0.6} />
           </mesh>
@@ -301,7 +405,7 @@ export function StadiumEnvironment() {
       ))}
 
       <InstancedStadiumCrowd />
-      <StadiumScoreboard />
+      <BlackWhiteScoreboard />
     </group>
   )
 }

@@ -5,6 +5,7 @@ import { resetAllBallsToTees } from '../physics/ballActions'
 import { useGameStore } from '../store/useGameStore'
 import { GameMode } from '../types/game'
 import { xrStore } from '../xr/xrStore'
+import { useFullscreen } from './useFullscreen'
 
 export function DesktopHUD() {
   const roomId = useGameStore((s) => s.roomId)
@@ -24,6 +25,7 @@ export function DesktopHUD() {
   const connectionLabel = useGameStore((s) => s.connectionLabel)
 
   const [copied, setCopied] = useState(false)
+  const { isFullscreen, toggleFullscreen } = useFullscreen()
 
   if (inXR) return null
 
@@ -130,6 +132,10 @@ export function DesktopHUD() {
 
           <button type="button" className="hud-btn" onClick={copyLink}>
             {copied ? 'Copied!' : 'Copy Invite'}
+          </button>
+
+          <button type="button" className="hud-btn" onClick={toggleFullscreen}>
+            {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
           </button>
 
           {xrSupported && (

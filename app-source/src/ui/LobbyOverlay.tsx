@@ -68,13 +68,15 @@ export function LobbyOverlay() {
     unlockAudioContext()
     voiceAudio.resumeContext()
 
-    // Enter WebXR synchronously within the user gesture when VR is chosen
+    // Enter WebXR synchronously within the user gesture when VR is chosen, or Fullscreen on PC
     if (targetPlatform === 'vr') {
       void xrStore.enterVR().catch(() => {
         useGameStore
           .getState()
           .setStatusBanner('WebXR failed to open. Continuing in 3D browser view.')
       })
+    } else if (typeof document !== 'undefined' && !document.fullscreenElement) {
+      void document.documentElement.requestFullscreen?.().catch(() => {})
     }
 
     setJoining(true)

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { p2pClient } from '../net/p2pClient'
 import { voiceAudio } from '../net/voiceAudio'
 import { useGameStore } from '../store/useGameStore'
+import { useFullscreen } from '../ui/useFullscreen'
 import { xrStore } from '../xr/xrStore'
 import { getMaxBallsForFormat, getMaxWicketsForFormat } from './types'
 import { resetCricketBallToBowler, useCricketStore } from './useCricketStore'
@@ -37,6 +38,7 @@ export function CricketHUD() {
   const keeperCatchActive = useCricketStore((s) => s.keeperCatchActive)
 
   const [copied, setCopied] = useState(false)
+  const { isFullscreen, toggleFullscreen } = useFullscreen()
 
   if (inXR) return null
 
@@ -249,6 +251,10 @@ export function CricketHUD() {
 
           <button type="button" className="hud-btn" onClick={copyLink}>
             {copied ? 'Copied!' : 'Invite'}
+          </button>
+
+          <button type="button" className="hud-btn" onClick={toggleFullscreen}>
+            {isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
           </button>
 
           {xrSupported && (

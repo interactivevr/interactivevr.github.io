@@ -256,29 +256,29 @@ export function stepCricketBallPhysics(
       const impact = Math.abs(ball.vel[1])
       if (onPitch) {
         const isWet = pitchMode === 'wet'
-        const restitution = isWet ? 0.49 : 0.78
-        const paceKeep = isWet ? 0.62 : 0.93
-        const turnFactor = isWet ? 0.68 : 1.38
+        const restitution = isWet ? 0.44 : 0.8
+        const paceKeep = isWet ? 0.56 : 0.94
+        const turnFactor = isWet ? 0.66 : 1.44
 
         ball.vel[1] = -ball.vel[1] * restitution
         ball.vel[2] *= paceKeep
-        ball.vel[0] *= isWet ? 0.72 : 0.9
+        ball.vel[0] *= isWet ? 0.68 : 0.92
 
         if (ball.phase === 'bowled' && !ball.bouncedOnPitch) {
           ball.bouncedOnPitch = true
           // Apply sideways spin/seam break off the pitch!
           ball.vel[0] += ball.spin[0] * turnFactor
           if (isWet && ball.bowlingStyle === 'fast') {
-            // Wet pitch really deadens fast deliveries
-            ball.vel[2] *= 0.84
+            // Wet pitch severely penalizes fast bowlers by taking pace off the ball
+            ball.vel[2] *= 0.78
           }
         }
         bouncedOnPitchNow = true
         playPitchBounceSfx(isWet, impact)
       } else {
-        ball.vel[1] = -ball.vel[1] * 0.56
-        ball.vel[0] *= 0.84
-        ball.vel[2] *= 0.84
+        ball.vel[1] = -ball.vel[1] * 0.52
+        ball.vel[0] *= 0.8
+        ball.vel[2] *= 0.8
         bouncedOutfieldNow = true
         playPitchBounceSfx(true, impact * 0.8)
       }
@@ -288,13 +288,13 @@ export function stepCricketBallPhysics(
       }
     } else {
       ball.vel[1] = 0
-      const rollDamp = Math.max(0, 1 - 1.45 * cDt)
+      const rollDamp = Math.max(0, 1 - 1.95 * cDt)
       ball.vel[0] *= rollDamp
       ball.vel[2] *= rollDamp
       if (ball.phase === 'hit') {
         ball.bouncedAfterHit = true
       }
-      if (Math.hypot(ball.vel[0], ball.vel[2]) < 0.25) {
+      if (Math.hypot(ball.vel[0], ball.vel[2]) < 0.35) {
         ball.vel[0] = 0
         ball.vel[2] = 0
         settled = true

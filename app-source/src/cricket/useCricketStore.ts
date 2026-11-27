@@ -109,6 +109,8 @@ export const cricketRuntime = {
   onCricketStateSend: null as ((payload: CricketStateSyncPayload) => void) | null,
 }
 
+export type CricketOutcomeKind = 'none' | 'wicket' | 'six' | 'four' | 'runs' | 'dot'
+
 export interface CricketStateSyncPayload {
   format: CricketFormat
   pitchMode: PitchMode
@@ -123,6 +125,7 @@ export interface CricketStateSyncPayload {
   inningsOver: boolean
   recentBalls: string[]
   eventBanner: string | null
+  lastOutcomeKind: CricketOutcomeKind
   assignments: CricketRoleAssignments
 }
 
@@ -154,6 +157,7 @@ export function resetCricketBallToBowler(style?: BowlingStyle, spinDir?: SpinDir
     cricketRuntime.fielders[idx].diving = false
   })
   cricketRuntime.aiBowlCooldownSec = 1.6
+  useCricketStore.setState({ lastOutcomeKind: 'none' })
   cricketRuntime.onCricketBallSend?.(fresh)
 }
 
@@ -177,6 +181,7 @@ export interface CricketStoreState {
   inningsOver: boolean
   recentBalls: string[]
   eventBanner: string | null
+  lastOutcomeKind: CricketOutcomeKind
   bowlerCharge: number
   bowlerCatchActive: boolean
   keeperCatchActive: boolean
@@ -235,6 +240,7 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
   inningsOver: false,
   recentBalls: [],
   eventBanner: null,
+  lastOutcomeKind: 'none',
   bowlerCharge: 0,
   bowlerCatchActive: false,
   keeperCatchActive: false,
@@ -407,6 +413,16 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       finalBanner = `INNINGS OVER: ${nextRuns}/${nextWickets}`
     }
 
+    const outcomeKind: CricketOutcomeKind = isWicket
+      ? 'wicket'
+      : runsScored >= 6
+        ? 'six'
+        : runsScored === 4
+          ? 'four'
+          : runsScored > 0
+            ? 'runs'
+            : 'dot'
+
     set({
       runs: nextRuns,
       wickets: nextWickets,
@@ -414,6 +430,7 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       inningsOver: inningsDone,
       recentBalls: [...st.recentBalls.slice(-11), label],
       eventBanner: finalBanner,
+      lastOutcomeKind: outcomeKind,
     })
   },
 
@@ -469,6 +486,7 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       inningsOver: payload.inningsOver,
       recentBalls: payload.recentBalls,
       eventBanner: payload.eventBanner,
+      lastOutcomeKind: payload.lastOutcomeKind ?? 'none',
       assignments: payload.assignments,
       localCricketRole: localRole,
       aiBatterEnabled: payload.assignments.batter === 'ai',
@@ -493,6 +511,7 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       inningsOver: st.inningsOver,
       recentBalls: st.recentBalls,
       eventBanner: st.eventBanner,
+      lastOutcomeKind: st.lastOutcomeKind,
       assignments: st.assignments,
     }
   },

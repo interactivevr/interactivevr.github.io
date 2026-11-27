@@ -7,6 +7,7 @@ import { voiceAudio } from '../net/voiceAudio'
 import { TextLabel } from '../scene/TextLabel'
 import { useGameStore } from '../store/useGameStore'
 import { xrStore } from '../xr/xrStore'
+import { CelebrationEffects } from './CelebrationEffects'
 import { CricketAvatars } from './CricketAvatars'
 import { CricketDesktopRig } from './CricketDesktopRig'
 import { CricketVRRig } from './CricketVRRig'
@@ -349,6 +350,7 @@ export function CricketArena() {
       <StadiumEnvironment />
       <CricketBallAndSim />
       <CricketAvatars />
+      <CelebrationEffects />
       {inXR ? <CricketVRRig /> : <CricketDesktopRig />}
       <InVRCricketPanel />
     </group>

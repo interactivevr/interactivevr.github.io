@@ -1,5 +1,5 @@
 import { useFrame } from '@react-three/fiber'
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 import { AthleteLookProfile, getAthleteProfile, HumanFaceHead } from '../scene/HumanFace'
 import { TextLabel } from '../scene/TextLabel'
@@ -25,41 +25,122 @@ export interface KitAnimState {
   frontStride?: number // extra lead-leg stride during batting shot (radians, signed -left/+right)
 }
 
+function createMrfStickerTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 512
+  const ctx = canvas.getContext('2d')!
+
+  // Clean willow base tint under sticker
+  ctx.fillStyle = '#f5dfb8'
+  ctx.fillRect(0, 0, 256, 512)
+
+  // Subtle wood grain vertical streaks
+  ctx.strokeStyle = 'rgba(180, 130, 75, 0.22)'
+  ctx.lineWidth = 2
+  for (let x = 12; x < 256; x += 18) {
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x + (x % 3 === 0 ? 4 : -3), 512)
+    ctx.stroke()
+  }
+
+  // Red & Black Genius Shield Stripe
+  ctx.fillStyle = '#111827'
+  ctx.fillRect(20, 72, 216, 265)
+  ctx.fillStyle = '#dc2626'
+  ctx.fillRect(28, 82, 200, 170)
+
+  // Gold diagonal swoosh
+  ctx.fillStyle = '#fbbf24'
+  ctx.beginPath()
+  ctx.moveTo(20, 252)
+  ctx.lineTo(236, 228)
+  ctx.lineTo(236, 248)
+  ctx.lineTo(20, 272)
+  ctx.closePath()
+  ctx.fill()
+
+  // Crisp White/Black MRF Logo
+  ctx.fillStyle = '#ffffff'
+  ctx.font = '900 76px Impact, Arial Black, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.strokeStyle = '#09090b'
+  ctx.lineWidth = 8
+  ctx.strokeText('MRF', 128, 160)
+  ctx.fillText('MRF', 128, 160)
+
+  // GENIUS Subtitle
+  ctx.fillStyle = '#f8fafc'
+  ctx.font = '800 32px Arial, sans-serif'
+  ctx.fillText('GENIUS', 128, 292)
+  ctx.fillStyle = '#fbbf24'
+  ctx.font = '700 18px Arial, sans-serif'
+  ctx.fillText('GRAND EDITION', 128, 322)
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.needsUpdate = true
+  return tex
+}
+
 export function CricketBatMesh({ highlight = false }: { highlight?: boolean }) {
+  const mrfTex = useMemo(() => createMrfStickerTexture(), [])
+  useEffect(() => () => mrfTex.dispose(), [mrfTex])
+
   return (
     <group>
-      {/* Rubberized Handle */}
+      {/* Classic MRF Red Ribbed Rubber Grip Handle */}
       <mesh position={[0, -0.11, 0]}>
         <cylinderGeometry args={[0.017, 0.019, 0.26, 12]} />
-        <meshStandardMaterial color="#0f172a" roughness={0.85} />
+        <meshStandardMaterial color="#dc2626" roughness={0.82} />
       </mesh>
-      <mesh position={[0, -0.02, 0]}>
-        <cylinderGeometry args={[0.02, 0.02, 0.04, 12]} />
-        <meshStandardMaterial color="#38bdf8" roughness={0.5} />
+      {[-0.04, -0.09, -0.14, -0.19].map((gy, idx) => (
+        <mesh key={idx} position={[0, gy, 0]}>
+          <cylinderGeometry args={[0.0195, 0.0195, 0.018, 12]} />
+          <meshStandardMaterial color="#111827" roughness={0.85} />
+        </mesh>
+      ))}
+      {/* Cane Splice Shoulders */}
+      <mesh position={[0, -0.255, 0]} scale={[1.8, 1, 0.8]}>
+        <cylinderGeometry args={[0.022, 0.036, 0.07, 10]} />
+        <meshStandardMaterial color="#e8c897" roughness={0.55} />
       </mesh>
-      {/* Sculpted Willow Blade */}
-      <mesh position={[0, -0.52, 0]}>
-        <boxGeometry args={[0.108, 0.58, 0.036]} />
+
+      {/* English Willow Blade */}
+      <mesh position={[0, -0.535, 0]}>
+        <boxGeometry args={[0.108, 0.56, 0.036]} />
         <meshStandardMaterial
-          color="#f5deb3"
-          roughness={0.52}
+          color="#f7e4bc"
+          roughness={0.48}
           emissive={highlight ? '#fbbf24' : '#000000'}
-          emissiveIntensity={highlight ? 0.22 : 0}
+          emissiveIntensity={highlight ? 0.14 : 0}
         />
       </mesh>
-      {/* Spine ridge */}
-      <mesh position={[0, -0.51, 0.02]}>
-        <boxGeometry args={[0.044, 0.54, 0.018]} />
-        <meshStandardMaterial color="#e6c896" roughness={0.5} />
+
+      {/* Angled Back Spine Ridge */}
+      <mesh position={[0, -0.525, 0.021]}>
+        <boxGeometry args={[0.048, 0.53, 0.022]} />
+        <meshStandardMaterial color="#edd3a1" roughness={0.48} />
       </mesh>
-      {/* Sticker & Toe Guard */}
-      <mesh position={[0, -0.44, -0.019]}>
-        <planeGeometry args={[0.086, 0.22]} />
-        <meshBasicMaterial color="#1d4ed8" />
+
+      {/* Front Face MRF Brand Sticker (-Z hitting face) */}
+      <mesh position={[0, -0.51, -0.019]}>
+        <planeGeometry args={[0.104, 0.44]} />
+        <meshBasicMaterial map={mrfTex} />
       </mesh>
-      <mesh position={[0, -0.815, 0]}>
-        <boxGeometry args={[0.108, 0.018, 0.038]} />
-        <meshStandardMaterial color="#0f172a" roughness={0.8} />
+
+      {/* Back Spine MRF Sticker (+Z back) */}
+      <mesh position={[0, -0.51, 0.033]} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[0.092, 0.42]} />
+        <meshBasicMaterial map={mrfTex} />
+      </mesh>
+
+      {/* Curved Protective Toe Guard */}
+      <mesh position={[0, -0.82, 0]}>
+        <boxGeometry args={[0.11, 0.022, 0.04]} />
+        <meshStandardMaterial color="#111827" roughness={0.85} />
       </mesh>
     </group>
   )

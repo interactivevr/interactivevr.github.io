@@ -8,15 +8,8 @@ import { segmentSphereIntersects } from '../physics/ballPhysics'
 import { getAthleteProfile } from '../scene/HumanFace'
 import { runtimeState, useGameStore } from '../store/useGameStore'
 import { computeDeliveryVelocity } from './cricketPhysics'
+import { CricketBatMesh, CricketGloveMesh } from './PlayerGear'
 import {
-  CricketBatMesh,
-  CricketGloveMesh,
-  CricketHelmetMesh,
-  CricketKitBody,
-  KitAnimState,
-} from './PlayerGear'
-import {
-  BATTING_STUMPS_Z,
   BOWLING_STUMPS_Z,
   CRICKET_BALL_RADIUS,
   getCricketSpawn,
@@ -26,6 +19,7 @@ import { cricketRuntime, useCricketStore } from './useCricketStore'
 
 const EYE_HEIGHT = 1.62
 const MOVE_SPEED = 4.0
+const PREVIEW_DOTS = 18
 
 const _forward = new THREE.Vector3()
 const _right = new THREE.Vector3()
@@ -50,6 +44,8 @@ export function CricketDesktopRig() {
   const localRole = useCricketStore((s) => s.localCricketRole)
   const batterStance = useCricketStore((s) => s.batterStance)
   const pitchTarget = useCricketStore((s) => s.pitchTarget)
+  const bowlingStyle = useCricketStore((s) => s.bowlingStyle)
+  const spinDir = useCricketStore((s) => s.spinDir)
 
   const keysRef = useRef<Set<string>>(new Set())
   const posRef = useRef(new THREE.Vector3(-0.48, 0, 9.04))
@@ -64,20 +60,15 @@ export function CricketDesktopRig() {
 
   const leftHandGroupRef = useRef<THREE.Group>(null)
   const rightHandGroupRef = useRef<THREE.Group>(null)
-  const helmetGroupRef = useRef<THREE.Group>(null)
   const pitchMarkerRef = useRef<THREE.Mesh>(null)
   const catchMittRef = useRef<THREE.Mesh>(null)
+  const previewDotsRef = useRef<THREE.InstancedMesh>(null)
+  const previewDummy = useMemo(() => new THREE.Object3D(), [])
 
-  const leftWristRef = useRef<[number, number, number]>([0, 1.0, 0])
-  const rightWristRef = useRef<[number, number, number]>([0, 1.0, 0])
-  const animRef = useRef<KitAnimState>({
-    runPhase: 0,
-    runSpeed: 0,
-    squat: 0.14,
-    torsoLean: 0.05,
-    diveTilt: 0,
-  })
-  const localProfile = useMemo(() => getAthleteProfile(localPeerId || playerName || 'local'), [localPeerId, playerName])
+  const localProfile = useMemo(
+    () => getAthleteProfile(localPeerId || playerName || 'local'),
+    [localPeerId, playerName]
+  )
 
   useEffect(() => {
     voiceAudio.ensureListener(camera)
@@ -87,7 +78,7 @@ export function CricketDesktopRig() {
     const spawn = getCricketSpawn(localRole, batterStance)
     posRef.current.set(spawn.position[0], 0, spawn.position[2])
     yawRef.current = spawn.yaw
-    pitchRef.current = localRole === 'bowler' ? -0.14 : -0.05
+    pitchRef.current = localRole === 'bowler' ? -0.11 : -0.05
   }, [localRole, batterStance, joined])
 
   useEffect(() => {
@@ -143,7 +134,7 @@ export function CricketDesktopRig() {
         } else if (st.localCricketRole === 'bowler' && cricketRuntime.ball.phase === 'ready' && !st.inningsOver) {
           chargingBowlRef.current = true
           chargeStartRef.current = performance.now()
-          st.setBowlerCharge(0.08)
+          st.setBowlerCharge(0.15)
         } else if (st.localCricketRole === 'wicketkeeper') {
           catchActiveRef.current = true
           st.setKeeperCatchActive(true)
@@ -169,15 +160,15 @@ export function CricketDesktopRig() {
         if (chargingBowlRef.current) {
           chargingBowlRef.current = false
           const elapsed = (performance.now() - chargeStartRef.current) / 1000
-          const power = Math.min(1, Math.max(0.25, elapsed / 0.85))
+          const power = Math.min(1, Math.max(0.35, elapsed / 0.85))
           st.setBowlerCharge(0)
 
           const ball = cricketRuntime.ball
           if (ball.phase === 'ready' && !st.inningsOver) {
             const releasePos: [number, number, number] = [
-              posRef.current.x + 0.25,
-              1.92,
-              Math.max(BOWLING_STUMPS_Z - 0.5, posRef.current.z + 0.5),
+              posRef.current.x + 0.26,
+              1.98,
+              Math.max(BOWLING_STUMPS_Z - 0.35, posRef.current.z + 0.45),
             ]
             const { vel, spin } = computeDeliveryVelocity(
               releasePos,
@@ -273,9 +264,6 @@ export function CricketDesktopRig() {
       if (len > 0.001) {
         posRef.current.x += (moveX / len) * MOVE_SPEED * dt
         posRef.current.z += (moveZ / len) * MOVE_SPEED * dt
-        animRef.current.runSpeed = 1
-        animRef.current.runPhase += dt * 10
-        // Constrain to sensible crease/play zone per role
         if (localRole === 'batter') {
           posRef.current.x = Math.max(-1.6, Math.min(1.6, posRef.current.x))
           posRef.current.z = Math.max(7.6, Math.min(9.9, posRef.current.z))
@@ -286,29 +274,20 @@ export function CricketDesktopRig() {
           posRef.current.x = Math.max(-3.0, Math.min(3.0, posRef.current.x))
           posRef.current.z = Math.max(10.8, Math.min(14.5, posRef.current.z))
         }
-      } else {
-        animRef.current.runSpeed = 0
       }
-      animRef.current.squat = localRole === 'wicketkeeper' ? 0.52 : localRole === 'batter' ? 0.24 : 0
-      animRef.current.stanceSpread = localRole === 'batter' ? 0.2 : localRole === 'wicketkeeper' ? 0.14 : 0
-      animRef.current.torsoLean = localRole === 'batter' ? 0.22 : localRole === 'wicketkeeper' ? 0.26 : 0.05
     }
 
     camera.position.set(posRef.current.x, EYE_HEIGHT, posRef.current.z)
     _euler.set(pitchRef.current, yawRef.current, 0, 'YXZ')
     camera.quaternion.setFromEuler(_euler)
 
-    if (helmetGroupRef.current) {
-      helmetGroupRef.current.position.copy(camera.position)
-      helmetGroupRef.current.quaternion.copy(camera.quaternion)
-    }
-
     _lookDir.set(0, 0, -1).applyEuler(_euler).normalize()
     _right.set(1, 0, 0).applyEuler(_euler).normalize()
 
-    // Update Pitch Target Reticle from camera ray onto ground y=0 for PC Bowler
-    if (localRole === 'bowler' && _lookDir.y < -0.02) {
-      const tHit = -camera.position.y / _lookDir.y
+    // Always-responsive Bowler pitch target raycast onto 22-yard strip
+    if (localRole === 'bowler') {
+      const rayY = Math.min(-0.085, _lookDir.y)
+      const tHit = -camera.position.y / rayY
       const hitX = camera.position.x + _lookDir.x * tHit
       const hitZ = camera.position.z + _lookDir.z * tHit
       crState.setPitchTarget(hitX, hitZ)
@@ -319,13 +298,55 @@ export function CricketDesktopRig() {
       pitchMarkerRef.current.position.set(pitchTarget[0], 0.025, pitchTarget[1])
     }
 
-    // Update Bowler Charge bar
+    // Update Bowler Charge bar & Dotted Flight Preview Arc
+    let previewPower = 0.68
     if (chargingBowlRef.current) {
       const elapsed = (performance.now() - chargeStartRef.current) / 1000
-      crState.setBowlerCharge(Math.min(1, Math.max(0.15, elapsed / 0.85)))
+      previewPower = Math.min(1, Math.max(0.25, elapsed / 0.85))
+      crState.setBowlerCharge(previewPower)
     }
 
-    // Update Desktop Hands + Authentic Two-Handed Cricket Batting Stance & Swing
+    if (previewDotsRef.current) {
+      const showPreview = localRole === 'bowler' && cricketRuntime.ball.phase === 'ready'
+      previewDotsRef.current.visible = showPreview
+      if (showPreview) {
+        const rel: [number, number, number] = [
+          posRef.current.x + 0.26,
+          1.98,
+          Math.max(BOWLING_STUMPS_Z - 0.35, posRef.current.z + 0.45),
+        ]
+        const { vel, spin } = computeDeliveryVelocity(
+          rel,
+          pitchTarget[0],
+          pitchTarget[1],
+          bowlingStyle,
+          spinDir,
+          previewPower
+        )
+        let px = rel[0]
+        let py = rel[1]
+        let pz = rel[2]
+        let vx = vel[0]
+        let vy = vel[1]
+        const vz = vel[2]
+        const stepDt = 0.045
+        for (let i = 0; i < PREVIEW_DOTS; i++) {
+          previewDummy.position.set(px, Math.max(0.04, py), pz)
+          previewDummy.scale.setScalar(1 - i * 0.03)
+          previewDummy.updateMatrix()
+          previewDotsRef.current.setMatrixAt(i, previewDummy.matrix)
+          vx += spin[0] * (bowlingStyle === 'fast' ? 0.55 : 0.28) * stepDt
+          vy += -9.81 * stepDt
+          px += vx * stepDt
+          py += vy * stepDt
+          pz += vz * stepDt
+          if (py <= CRICKET_BALL_RADIUS) break
+        }
+        previewDotsRef.current.instanceMatrix.needsUpdate = true
+      }
+    }
+
+    // First-person Unobstructed Gloves & MRF Bat positioning
     const stanceSign = batterStance === 'right' ? 1 : -1
     let swingPhase = 0
     if (batSwingTimerRef.current > 0) {
@@ -333,47 +354,28 @@ export function CricketDesktopRig() {
       swingPhase = Math.sin((1 - batSwingTimerRef.current / 0.28) * Math.PI)
     }
 
-    if (localRole === 'batter') {
-      animRef.current.torsoTwist = swingPhase * 0.45 * stanceSign
-      animRef.current.frontStride = swingPhase * 0.22 * -stanceSign
-    } else {
-      animRef.current.torsoTwist = 0
-      animRef.current.frontStride = 0
-    }
-
-    const tap =
-      localRole === 'batter' && cricketRuntime.ball.phase === 'ready' && swingPhase <= 0
-        ? Math.max(0, Math.sin(performance.now() * 0.005)) * 0.04
-        : 0
-    const backlift =
-      localRole === 'batter' && cricketRuntime.ball.phase === 'bowled' && swingPhase <= 0 ? 0.14 : 0
-
     const rHandX =
       localRole === 'batter'
-        ? posRef.current.x + _lookDir.x * (0.44 + swingPhase * 0.42) + _right.x * (0.16 * stanceSign - swingPhase * 0.22 * stanceSign)
-        : posRef.current.x + _lookDir.x * (0.48 + swingPhase * 0.34) + _right.x * (0.24 * stanceSign - swingPhase * 0.32 * stanceSign)
+        ? posRef.current.x + _lookDir.x * (0.48 + swingPhase * 0.4) + _right.x * (0.2 * stanceSign - swingPhase * 0.25 * stanceSign)
+        : posRef.current.x + _lookDir.x * 0.52 + _right.x * 0.24
     const rHandY =
       localRole === 'batter'
-        ? 0.9 + tap + backlift + swingPhase * (batLoftRef.current ? 0.34 : 0.18)
-        : EYE_HEIGHT - 0.52 + swingPhase * (batLoftRef.current ? 0.26 : 0.1)
+        ? 1.02 + swingPhase * (batLoftRef.current ? 0.32 : 0.16)
+        : EYE_HEIGHT - 0.35
     const rHandZ =
       localRole === 'batter'
-        ? posRef.current.z + _lookDir.z * (0.44 + swingPhase * 0.42) + _right.z * (0.16 * stanceSign - swingPhase * 0.22 * stanceSign)
-        : posRef.current.z + _lookDir.z * (0.48 + swingPhase * 0.34) + _right.z * (0.24 * stanceSign - swingPhase * 0.32 * stanceSign)
+        ? posRef.current.z + _lookDir.z * (0.48 + swingPhase * 0.4) + _right.z * (0.2 * stanceSign - swingPhase * 0.25 * stanceSign)
+        : posRef.current.z + _lookDir.z * 0.52 + _right.z * 0.24
 
-    // Top hand stacks directly on bat grip above bottom hand in batting stance
     const lHandX =
       localRole === 'batter'
         ? rHandX - _right.x * (0.02 * stanceSign)
-        : posRef.current.x + _lookDir.x * 0.44 - _right.x * (0.22 * stanceSign)
-    const lHandY = localRole === 'batter' ? rHandY + 0.07 : EYE_HEIGHT - 0.48 + swingPhase * 0.08
+        : posRef.current.x + _lookDir.x * 0.52 - _right.x * 0.24
+    const lHandY = localRole === 'batter' ? rHandY + 0.065 : EYE_HEIGHT - 0.35
     const lHandZ =
       localRole === 'batter'
         ? rHandZ - _right.z * (0.02 * stanceSign)
-        : posRef.current.z + _lookDir.z * 0.44 - _right.z * (0.22 * stanceSign)
-
-    leftWristRef.current = [lHandX, lHandY, lHandZ]
-    rightWristRef.current = [rHandX, rHandY, rHandZ]
+        : posRef.current.z + _lookDir.z * 0.52 - _right.z * 0.24
 
     if (leftHandGroupRef.current) {
       leftHandGroupRef.current.position.set(lHandX, lHandY, lHandZ)
@@ -381,29 +383,28 @@ export function CricketDesktopRig() {
     }
     if (rightHandGroupRef.current) {
       rightHandGroupRef.current.position.set(rHandX, rHandY, rHandZ)
-      // Angle cricket bat cleanly across strike zone: ready/backlift -> drive -> follow-through
       const batPitch =
         localRole === 'batter'
-          ? -0.28 - backlift * 1.3 + swingPhase * (batLoftRef.current ? 1.55 : 1.2)
-          : 0.25 + swingPhase * (batLoftRef.current ? 0.95 : 0.65)
-      const batRoll = -0.18 * stanceSign + swingPhase * 0.45 * stanceSign
+          ? -0.2 + swingPhase * (batLoftRef.current ? 1.5 : 1.18)
+          : 0.2
+      const batRoll = -0.18 * stanceSign + swingPhase * 0.42 * stanceSign
       _swingEuler.set(batPitch, 0, batRoll)
       _swingQuat.setFromEuler(_swingEuler)
       _quat.copy(camera.quaternion).multiply(_swingQuat)
       rightHandGroupRef.current.quaternion.copy(_quat)
     }
 
-    // Sync localPose for WebRTC broadcast
+    // Sync localPose for WebRTC peers
     const lp = runtimeState.localPose
     lp.headPos = [camera.position.x, camera.position.y, camera.position.z]
     lp.headQuat = [camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w]
-    lp.leftPos = leftWristRef.current
-    lp.rightPos = rightWristRef.current
+    lp.leftPos = [lHandX, lHandY, lHandZ]
+    lp.rightPos = [rHandX, rHandY, rHandZ]
     lp.leftQuat = [...lp.headQuat]
     lp.rightQuat = [...lp.headQuat]
     lp.catchingActive = catchActiveRef.current
 
-    // Bat swept segment for PC Batter
+    // Bat swept collision for PC Batter
     if (localRole === 'batter') {
       const bat = cricketRuntime.bat
       bat.prevBase = [...bat.currBase]
@@ -417,10 +418,10 @@ export function CricketDesktopRig() {
 
       _batNormVec.copy(_lookDir).normalize()
       if (swingPhase > 0.05) {
-        const speed = batLoftRef.current ? 19.5 : 15.5
+        const speed = batLoftRef.current ? 20.5 : 16.0
         bat.vel = [
           _batNormVec.x * speed,
-          batLoftRef.current ? 7.5 : 2.2,
+          batLoftRef.current ? 7.8 : 2.3,
           _batNormVec.z * speed,
         ]
       } else {
@@ -432,7 +433,7 @@ export function CricketDesktopRig() {
       cricketRuntime.bat.active = false
     }
 
-    // PC Bowler Caught & Bowled OR PC Keeper Catch Mitt
+    // Catch Mitt for Bowler / Keeper
     const mittPosX = posRef.current.x + _lookDir.x * 0.72
     const mittPosY = EYE_HEIGHT - 0.14 + _lookDir.y * 0.72
     const mittPosZ = posRef.current.z + _lookDir.z * 0.72
@@ -455,7 +456,7 @@ export function CricketDesktopRig() {
         mittPosX,
         mittPosY,
         mittPosZ,
-        CRICKET_BALL_RADIUS + 0.48
+        CRICKET_BALL_RADIUS + 0.52
       )
       if (hit) {
         ball.phase = 'dead'
@@ -488,7 +489,7 @@ export function CricketDesktopRig() {
         mittPosX,
         mittPosY,
         mittPosZ,
-        CRICKET_BALL_RADIUS + 0.55
+        CRICKET_BALL_RADIUS + 0.58
       )
       if (hit) {
         const isCaughtBehind = ball.phase === 'hit' && !ball.bouncedAfterHit
@@ -530,7 +531,6 @@ export function CricketDesktopRig() {
       }
     }
     void localPeerId
-    void BATTING_STUMPS_Z
   })
 
   const gloveVariant =
@@ -539,31 +539,7 @@ export function CricketDesktopRig() {
 
   return (
     <group>
-      <CricketKitBody
-        role={localRole}
-        playerName={playerName}
-        jerseyNumber="01"
-        jerseyColor={jerseyColor}
-        lookProfile={localProfile}
-        hideHead
-        getBodyAnchor={() => ({
-          pos: [posRef.current.x, 0, posRef.current.z],
-          yaw:
-            localRole === 'batter'
-              ? yawRef.current - (batterStance === 'right' ? 1 : -1) * Math.PI * 0.42
-              : yawRef.current,
-        })}
-        getLeftWrist={() => leftWristRef.current}
-        getRightWrist={() => rightWristRef.current}
-        getAnimState={() => animRef.current}
-      />
-
-      {(localRole === 'batter' || localRole === 'wicketkeeper') && (
-        <group ref={helmetGroupRef}>
-          <CricketHelmetMesh jerseyColor={jerseyColor} firstPersonFraming />
-        </group>
-      )}
-
+      {/* Unobstructed First-Person Gloves & MRF Bat */}
       <group ref={leftHandGroupRef}>
         <CricketGloveMesh
           variant={gloveVariant}
@@ -582,15 +558,19 @@ export function CricketDesktopRig() {
         {localRole === 'batter' && <CricketBatMesh highlight />}
       </group>
 
-      {/* Bowler Pitch Landing Target Ring */}
+      {/* Bowler Pitch Landing Target Ring & Flight Preview */}
       <mesh ref={pitchMarkerRef} rotation={[-Math.PI / 2, 0, 0]} visible={false}>
-        <ringGeometry args={[0.18, 0.28, 24]} />
-        <meshBasicMaterial color="#fbbf24" transparent opacity={0.9} />
+        <ringGeometry args={[0.18, 0.3, 24]} />
+        <meshBasicMaterial color="#fbbf24" transparent opacity={0.95} />
       </mesh>
+      <instancedMesh ref={previewDotsRef} args={[undefined, undefined, PREVIEW_DOTS]} visible={false}>
+        <sphereGeometry args={[0.028, 8, 8]} />
+        <meshBasicMaterial color="#fde047" transparent opacity={0.8} />
+      </instancedMesh>
 
       {/* Catch Mitt Sphere for Bowler / Wicketkeeper */}
       <mesh ref={catchMittRef} visible={false}>
-        <sphereGeometry args={[0.24, 16, 12]} />
+        <sphereGeometry args={[0.25, 16, 12]} />
         <meshBasicMaterial color="#34d399" transparent opacity={0.3} wireframe />
       </mesh>
     </group>

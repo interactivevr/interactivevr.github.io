@@ -81,13 +81,14 @@ export interface OutfieldPosition {
 }
 
 export const AI_FIELD_POSITIONS: readonly OutfieldPosition[] = [
-  { id: 0, label: 'First Slip', home: [-1.4, 0, 12.6] },
-  { id: 1, label: 'Point', home: [-17.5, 0, 9.2] },
-  { id: 2, label: 'Cover', home: [-19.0, 0, -2.5] },
+  { id: 0, label: 'First Slip', home: [-1.45, 0, 12.8] },
+  { id: 1, label: 'Point', home: [-16.5, 0, 9.2] },
+  { id: 2, label: 'Cover', home: [-18.5, 0, -2.5] },
   { id: 3, label: 'Mid-Off', home: [-8.5, 0, -14.5] },
-  { id: 4, label: 'Long-Off', home: [-16.0, 0, -29.0] },
-  { id: 5, label: 'Long-On', home: [15.5, 0, -29.5] },
+  { id: 4, label: 'Long-Off', home: [-15.5, 0, -28.5] },
+  { id: 5, label: 'Long-On', home: [15.5, 0, -28.5] },
   { id: 6, label: 'Mid-On', home: [8.8, 0, -14.0] },
-  { id: 7, label: 'Square Leg', home: [18.5, 0, 8.8] },
-  { id: 8, label: 'Fine Leg', home: [12.5, 0, 24.5] },
+  { id: 7, label: 'Deep Midwicket', home: [23.0, 0, -8.5] },
+  { id: 8, label: 'Square Leg', home: [17.5, 0, 8.8] },
+  { id: 9, label: 'Fine Leg', home: [12.5, 0, 24.5] },
 ] as const

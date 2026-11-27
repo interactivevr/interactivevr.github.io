@@ -18,13 +18,8 @@ import { ArticulatedHand } from '../scene/ArticulatedHand'
 import { getAthleteProfile } from '../scene/HumanFace'
 import { runtimeState, useGameStore } from '../store/useGameStore'
 import { HandSide } from '../types/game'
-import {
-  CricketBatMesh,
-  CricketGloveMesh,
-  CricketHelmetMesh,
-  CricketKitBody,
-  KitAnimState,
-} from './PlayerGear'
+import { computeDeliveryVelocity } from './cricketPhysics'
+import { CricketBatMesh, CricketGloveMesh } from './PlayerGear'
 import { CRICKET_BALL_RADIUS, getCricketSpawn, WIDE_HALF_W } from './types'
 import { cricketRuntime, useCricketStore } from './useCricketStore'
 
@@ -34,7 +29,6 @@ const _batDir = new THREE.Vector3()
 const _batNormal = new THREE.Vector3()
 const _prevBatCenter = new THREE.Vector3()
 const _currBatCenter = new THREE.Vector3()
-const _euler = new THREE.Euler()
 const _batTiltQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI * 0.35)
 
 function pulseHaptics(inputSource: XRInputSource | undefined, intensity: number, durationMs: number): void {
@@ -55,7 +49,6 @@ export function CricketVRRig() {
   const originRef = useRef<THREE.Group>(null)
   const leftHandGroupRef = useRef<THREE.Group>(null)
   const rightHandGroupRef = useRef<THREE.Group>(null)
-  const helmetGroupRef = useRef<THREE.Group>(null)
   const catchAuraRef = useRef<THREE.Mesh>(null)
 
   const camera = useThree((s) => s.camera)
@@ -83,19 +76,11 @@ export function CricketVRRig() {
   const grabStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const handSelectRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const holdingBallHandRef = useRef<HandSide | null>(null)
-  const bodyPosRef = useRef<[number, number, number]>([...spawn.position])
-  const prevBodyPosRef = useRef<[number, number, number]>([...spawn.position])
-  const bodyYawRef = useRef(spawn.yaw)
-  const leftWristRef = useRef<[number, number, number]>([0, 1.0, 0])
-  const rightWristRef = useRef<[number, number, number]>([0, 1.0, 0])
-  const animRef = useRef<KitAnimState>({
-    runPhase: 0,
-    runSpeed: 0,
-    squat: localRole === 'wicketkeeper' ? 0.55 : localRole === 'batter' ? 0.14 : 0,
-    torsoLean: 0.06,
-    diveTilt: 0,
-  })
-  const localProfile = useMemo(() => getAthleteProfile(localPeerId || playerName || 'local'), [localPeerId, playerName])
+
+  const localProfile = useMemo(
+    () => getAthleteProfile(localPeerId || playerName || 'local'),
+    [localPeerId, playerName]
+  )
 
   useEffect(() => {
     voiceAudio.ensureListener(camera)
@@ -149,31 +134,6 @@ export function CricketVRRig() {
     camera.getWorldQuaternion(_worldQuat)
     lp.headPos = [_worldPos.x, _worldPos.y, _worldPos.z]
     lp.headQuat = [_worldQuat.x, _worldQuat.y, _worldQuat.z, _worldQuat.w]
-
-    prevBodyPosRef.current = [...bodyPosRef.current]
-    bodyPosRef.current = [_worldPos.x, Math.max(0, _worldPos.y - 1.58), _worldPos.z]
-    _euler.setFromQuaternion(_worldQuat, 'YXZ')
-    const stanceSign = batterStance === 'right' ? 1 : -1
-    bodyYawRef.current =
-      localRole === 'batter' ? _euler.y - stanceSign * Math.PI * 0.4 : _euler.y
-
-    const moveDist = Math.hypot(
-      bodyPosRef.current[0] - prevBodyPosRef.current[0],
-      bodyPosRef.current[2] - prevBodyPosRef.current[2]
-    )
-    const cDt = Math.max(0.004, Math.min(0.05, delta))
-    animRef.current.runSpeed = Math.min(1, moveDist / cDt / 3.2)
-    if (animRef.current.runSpeed > 0.08) {
-      animRef.current.runPhase += cDt * 9 * animRef.current.runSpeed
-    }
-    animRef.current.squat = localRole === 'wicketkeeper' ? 0.55 : localRole === 'batter' ? 0.22 : 0
-    animRef.current.stanceSpread = localRole === 'batter' ? 0.19 : 0
-    animRef.current.torsoLean = localRole === 'batter' ? 0.2 : localRole === 'wicketkeeper' ? 0.25 : 0.05
-
-    if (helmetGroupRef.current) {
-      helmetGroupRef.current.position.copy(_worldPos)
-      helmetGroupRef.current.quaternion.copy(_worldQuat)
-    }
 
     const readSide = (side: HandSide) => {
       const ctrl = side === 'left' ? leftController : rightController
@@ -233,7 +193,6 @@ export function CricketVRRig() {
         lp.leftQuat = quatArr
         lp.leftCurls = curls
         lp.leftGrabbing = isGrabbing
-        leftWristRef.current = posArr
         if (leftHandGroupRef.current) {
           leftHandGroupRef.current.position.set(posArr[0], posArr[1], posArr[2])
           leftHandGroupRef.current.quaternion.set(quatArr[0], quatArr[1], quatArr[2], quatArr[3])
@@ -243,7 +202,6 @@ export function CricketVRRig() {
         lp.rightQuat = quatArr
         lp.rightCurls = curls
         lp.rightGrabbing = isGrabbing
-        rightWristRef.current = posArr
         if (rightHandGroupRef.current) {
           rightHandGroupRef.current.position.set(posArr[0], posArr[1], posArr[2])
           rightHandGroupRef.current.quaternion.set(quatArr[0], quatArr[1], quatArr[2], quatArr[3])
@@ -260,7 +218,7 @@ export function CricketVRRig() {
     const crState = useCricketStore.getState()
     const ball = cricketRuntime.ball
 
-    // 1. Batter Role: sync swept 3D Cricket Bat segment
+    // 1. Batter Role: swept MRF Cricket Bat collision (no obstructive body mesh!)
     if (localRole === 'batter') {
       const batHand = batterStance === 'left' ? leftRes : rightRes
       const q = _worldQuat.set(
@@ -269,7 +227,6 @@ export function CricketVRRig() {
         batHand.quatArr[2],
         batHand.quatArr[3]
       )
-      // Bat is angled naturally forward along controller/hand grip (+Math.PI*0.35 around X)
       q.multiply(_batTiltQuat)
 
       _batDir.set(0, -1, 0).applyQuaternion(q).normalize()
@@ -314,14 +271,14 @@ export function CricketVRRig() {
 
     cricketRuntime.bat.active = false
 
-    // 2. Bowler Role: grip ball -> release delivery + mid-air Caught & Bowled!
+    // 2. Bowler Role: effortless grip + pitch-aim-assisted overarm delivery + Caught & Bowled!
     if (localRole === 'bowler' && !crState.inningsOver) {
       if (ball.phase === 'ready') {
         const heldSide = holdingBallHandRef.current
         if (heldSide === null) {
           ;(['right', 'left'] as HandSide[]).forEach((s) => {
             const res = s === 'left' ? leftRes : rightRes
-            if (res.isGrabbing && Math.hypot(ball.pos[0] - res.posArr[0], ball.pos[1] - res.posArr[1], ball.pos[2] - res.posArr[2]) < 0.45) {
+            if (res.isGrabbing) {
               holdingBallHandRef.current = s
               res.estimator.reset()
               pulseHaptics(res.activeInput, 0.5, 45)
@@ -333,21 +290,31 @@ export function CricketVRRig() {
             ball.prevPos = [...ball.pos]
             ball.pos = [...res.posArr]
           } else {
-            // Release delivery!
-            const rawVel = res.estimator.computeVelocity(nowSec, 1.48, 27)
-            // Ensure forward Z delivery toward batting stumps
-            const vz = Math.max(bowlingStyle === 'fast' ? 16.5 : 10.5, rawVel[2])
-            const vx = Math.max(-3.5, Math.min(3.5, rawVel[0]))
-            const vy = Math.max(-1.0, Math.min(5.5, rawVel[1]))
-            const spinSign = spinDir === 'off' ? 1 : -1
-            const spinX = bowlingStyle === 'fast' ? spinSign * 0.65 : spinSign * 2.45
+            // Compute real arm motion + map onto authentic 22-yard pitch corridor so every VR bowl hits the strip cleanly!
+            const rawVel = res.estimator.computeVelocity(nowSec, 1.35, 28)
+            const rawSpeed = Math.hypot(rawVel[0], rawVel[1], rawVel[2])
+            const power01 = Math.max(0.25, Math.min(1, rawSpeed / 14))
+            const forwardZ = Math.max(4.0, rawVel[2])
+            const aimX = Math.max(-0.85, Math.min(0.85, (rawVel[0] / forwardZ) * 10))
+            // Slightly downward release aims fuller (yorker), higher release pitches shorter
+            const elevFactor = Math.max(-0.35, Math.min(0.35, rawVel[1] / forwardZ))
+            const targetZ = Math.max(2.6, Math.min(8.3, 5.4 - elevFactor * 7.5))
+
+            const { vel, spin } = computeDeliveryVelocity(
+              res.posArr,
+              aimX,
+              targetZ,
+              bowlingStyle,
+              spinDir,
+              power01
+            )
 
             ball.phase = 'bowled'
             ball.ownerId = localPeerId || 'local'
             ball.pos = [...res.posArr]
             ball.prevPos = [...res.posArr]
-            ball.vel = [vx, vy, vz]
-            ball.spin = [spinX, 0, 0]
+            ball.vel = vel
+            ball.spin = spin
             ball.bowlingStyle = bowlingStyle
             ball.spinDir = spinDir
             ball.bouncedOnPitch = false
@@ -357,13 +324,12 @@ export function CricketVRRig() {
             ball.epoch += 1
             ball.timestamp = Date.now()
             holdingBallHandRef.current = null
-            playThrowSfx(vz)
+            playThrowSfx(Math.hypot(vel[0], vel[1], vel[2]))
             pulseHaptics(res.activeInput, 0.5, 50)
             cricketRuntime.onCricketBallSend?.(ball)
           }
         }
       } else if (ball.phase === 'hit' && !ball.bouncedAfterHit) {
-        // CAUGHT & BOWLED check in VR ("comes from batter to bowler in airways")!
         ;(['right', 'left'] as HandSide[]).forEach((s) => {
           const res = s === 'left' ? leftRes : rightRes
           if (!res.isGrabbing) return
@@ -377,7 +343,7 @@ export function CricketVRRig() {
             res.posArr[0],
             res.posArr[1],
             res.posArr[2],
-            CRICKET_BALL_RADIUS + 0.36
+            CRICKET_BALL_RADIUS + 0.4
           )
           if (caught) {
             ball.phase = 'dead'
@@ -422,7 +388,7 @@ export function CricketVRRig() {
             res.posArr[0],
             res.posArr[1],
             res.posArr[2],
-            CRICKET_BALL_RADIUS + 0.42
+            CRICKET_BALL_RADIUS + 0.45
           )
           if (caught) {
             const isCaughtBehind = ball.phase === 'hit' && !ball.bouncedAfterHit
@@ -488,28 +454,7 @@ export function CricketVRRig() {
         )}
       </XROrigin>
 
-      {/* First-person Own Body (Torso with Name Front & Back, Legs, Pads, Jersey Arms) */}
-      <CricketKitBody
-        role={localRole}
-        playerName={playerName}
-        jerseyNumber="01"
-        jerseyColor={jerseyColor}
-        lookProfile={localProfile}
-        hideHead
-        getBodyAnchor={() => ({ pos: bodyPosRef.current, yaw: bodyYawRef.current })}
-        getLeftWrist={() => leftWristRef.current}
-        getRightWrist={() => rightWristRef.current}
-        getAnimState={() => animRef.current}
-      />
-
-      {/* Subtle peripheral Helmet visor framing for Batter & Keeper */}
-      {(localRole === 'batter' || localRole === 'wicketkeeper') && (
-        <group ref={helmetGroupRef}>
-          <CricketHelmetMesh jerseyColor={jerseyColor} firstPersonFraming />
-        </group>
-      )}
-
-      {/* Gloves & Cricket Bat */}
+      {/* Unobstructed First-Person Gloves & MRF Cricket Bat */}
       <group ref={leftHandGroupRef}>
         <CricketGloveMesh
           variant={gloveVariant}
@@ -539,7 +484,7 @@ export function CricketVRRig() {
 
       {/* Bowler / Keeper catch pocket indicator */}
       <mesh ref={catchAuraRef} visible={false}>
-        <sphereGeometry args={[0.36, 16, 12]} />
+        <sphereGeometry args={[0.38, 16, 12]} />
         <meshBasicMaterial color="#34d399" transparent opacity={0.18} wireframe />
       </mesh>
     </>

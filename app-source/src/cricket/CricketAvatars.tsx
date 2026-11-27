@@ -210,6 +210,7 @@ function ComputerCricketPlayer({
 
   const profile = useMemo(() => getAthleteProfile(seedIdx), [seedIdx])
   const batterStance = useCricketStore((s) => s.batterStance)
+  const lastOutcomeKind = useCricketStore((s) => s.lastOutcomeKind)
 
   useFrame((state, delta) => {
     const t = state.clock.elapsedTime
@@ -218,6 +219,7 @@ function ComputerCricketPlayer({
     let pz = 0
     let yaw = 0
     const stanceSign = batterStance === 'right' ? 1 : -1
+    const celebratingWicket = cricketRuntime.ball.phase === 'dead' && lastOutcomeKind === 'wicket'
 
     if (role === 'outfielder' && fielderIdx !== undefined) {
       const f = cricketRuntime.fielders[fielderIdx]
@@ -247,14 +249,16 @@ function ComputerCricketPlayer({
       pz = cricketRuntime.aiBowlerPos[2]
       yaw = Math.PI
       const isRunup = cricketRuntime.ball.phase === 'ready'
-      animRef.current.runSpeed = isRunup ? 0.92 : 0
+      const runP = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / 1.55))
+      animRef.current.runSpeed = isRunup ? 0.95 : 0
       if (isRunup) {
-        animRef.current.runPhase += cDt * 11
-        bowlArmAngleRef.current += cDt * 8.5
+        animRef.current.runPhase += cDt * 12
+        // Single authentic arm gather & overarm release sweep at end of run-up
+        bowlArmAngleRef.current = runP < 0.68 ? -0.4 : -0.4 + ((runP - 0.68) / 0.32) * (Math.PI * 1.45)
       } else {
-        bowlArmAngleRef.current = 0.4
+        bowlArmAngleRef.current = Math.PI * 1.1
       }
-      animRef.current.torsoLean = isRunup ? 0.22 : 0.06
+      animRef.current.torsoLean = isRunup ? 0.24 : 0.12
       animRef.current.stanceSpread = 0
       animRef.current.headYawOffset = 0
     } else if (role === 'wicketkeeper') {
@@ -269,7 +273,6 @@ function ComputerCricketPlayer({
     } else if (role === 'batter') {
       px = cricketRuntime.aiBatterPos[0]
       pz = cricketRuntime.aiBatterPos[2]
-      // Authentic sideways stance: lead shoulder points down the pitch (-Z), head turns toward bowler
       yaw = -stanceSign * Math.PI * 0.44
       const swing = cricketRuntime.aiBatSwingPhase
       const swingArc = Math.sin(swing * Math.PI)
@@ -282,7 +285,7 @@ function ComputerCricketPlayer({
       animRef.current.frontStride = swingArc * 0.24 * -stanceSign
       animRef.current.headYawOffset = stanceSign * Math.PI * 0.42
       animRef.current.torsoTwist = isBowled && swing <= 0
-        ? -0.18 * stanceSign // subtle shoulder coil in backlift
+        ? -0.18 * stanceSign
         : swingArc * 0.48 * stanceSign
     }
 
@@ -299,7 +302,6 @@ function ComputerCricketPlayer({
       const tap = cricketRuntime.ball.phase === 'ready' ? Math.max(0, Math.sin(t * 5.2)) * 0.06 : 0
       const backlift = isBowled && swing <= 0 ? 0.18 : 0
 
-      // Two-handed stacked grip just outside front pad, tapping at crease then lifting & driving through
       const handX = px + stanceSign * (0.14 - swingArc * 0.12)
       const handY = 0.86 + tap + backlift + swingArc * 0.3
       const handZ = pz - 0.15 - swingArc * 0.48
@@ -313,19 +315,30 @@ function ComputerCricketPlayer({
         const rollAngle = stanceSign * (0.18 - swingArc * 0.35)
         batGroupRef.current.rotation.set(pitchAngle, 0, rollAngle)
       }
+    } else if (celebratingWicket) {
+      // Bowler, keeper & fielders celebrate wicket with arms raised!
+      const cheerBob = Math.abs(Math.sin(t * 9 + seedIdx)) * 0.14
+      leftWristRef.current = [px - 0.28 * cosY, 1.82 + cheerBob, pz + 0.28 * sinY]
+      rightWristRef.current = [px + 0.28 * cosY, 1.82 + cheerBob, pz - 0.28 * sinY]
     } else if (role === 'bowler') {
-      // Authentic overarm bowling arm windup & pumping non-bowling arm
+      const runP = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / 1.55))
       const swingOff = Math.sin(animRef.current.runPhase) * 0.22 * animRef.current.runSpeed
-      const bowlY = 1.38 + Math.sin(bowlArmAngleRef.current) * 0.46
-      const bowlZ = pz - Math.cos(bowlArmAngleRef.current) * 0.34
-      leftWristRef.current = [px - 0.26 * cosY, 1.15 + swingOff, pz + 0.26 * sinY + swingOff]
-      rightWristRef.current = [px + 0.26 * cosY, bowlY, bowlZ]
+      if (cricketRuntime.ball.phase === 'ready' && runP < 0.68) {
+        // Pumping running arms during run-up
+        leftWristRef.current = [px - 0.24 * cosY, 1.12 + swingOff, pz + 0.24 * sinY + swingOff]
+        rightWristRef.current = [px + 0.24 * cosY, 1.12 - swingOff, pz - 0.24 * sinY - swingOff]
+      } else {
+        // Single authentic overarm delivery arc (top of arc = 2.04m release!)
+        const a = bowlArmAngleRef.current
+        const bowlY = 1.44 + Math.sin(a) * 0.62
+        const bowlZ = pz + Math.cos(a) * 0.36
+        leftWristRef.current = [px - 0.26 * cosY, 1.45 - Math.sin(a) * 0.25, pz + 0.18]
+        rightWristRef.current = [px + 0.22 * cosY, bowlY, bowlZ]
+      }
     } else if (role === 'wicketkeeper') {
-      // Keeper gloves poised together ready behind stumps
       leftWristRef.current = [px - 0.11, 0.78, pz - 0.34]
       rightWristRef.current = [px + 0.11, 0.78, pz - 0.34]
     } else {
-      // Outfielder sprint arm pumping vs athletic ready stance
       const pump = Math.sin(animRef.current.runPhase) * 0.28 * animRef.current.runSpeed
       leftWristRef.current = [
         px - 0.22 * cosY - sinY * (0.24 - pump),
