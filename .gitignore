@@ -1,0 +1,6 @@
+node_modules/
+app-source/node_modules/
+app-source/.vite-cache/
+app-source/dist/
+.DS_Store
+*.local
