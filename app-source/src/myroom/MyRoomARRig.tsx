@@ -157,10 +157,12 @@ export function MyRoomARRig() {
       desktopKeysRef.current.clear()
       desktopDragRef.current = null
       myRoomRuntime.ai.desktopRotateDrag = false
+      document.body.style.cursor = ''
     }
     const onMouseDown = (e: MouseEvent) => {
       if (myRoomRuntime.ai.desktopRotateDrag || e.button === 2 || (e.button === 0 && e.shiftKey)) {
         desktopDragRef.current = 'model'
+        document.body.style.cursor = 'grabbing'
       } else if (e.button === 0) {
         desktopDragRef.current = 'look'
       }
@@ -168,9 +170,11 @@ export function MyRoomARRig() {
     const onMouseUp = () => {
       desktopDragRef.current = null
       myRoomRuntime.ai.desktopRotateDrag = false
+      document.body.style.cursor = ''
     }
     const onMouseMove = (e: MouseEvent) => {
       if (myRoomRuntime.ai.desktopRotateDrag || desktopDragRef.current === 'model') {
+        document.body.style.cursor = 'grabbing'
         useMyRoomStore.getState().rotateAiModelBy(e.movementX * 0.0085)
         return
       }
@@ -202,6 +206,7 @@ export function MyRoomARRig() {
     canvas.addEventListener('wheel', onWheel, { passive: true })
 
     return () => {
+      document.body.style.cursor = ''
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
@@ -285,6 +290,13 @@ export function MyRoomARRig() {
         handY,
         desktopPosRef.current.z + right.z * 0.22 + fwd.z * 0.28,
       ]
+    } else {
+      // In Meta Quest VR/AR, right controller thumbstick X smoothly rotates the opponent avatar 360°
+      const axes = rightController?.inputSource?.gamepad?.axes
+      const stickX = axes && axes.length >= 3 ? axes[2] : (axes?.[0] ?? 0)
+      if (Math.abs(stickX) > 0.24) {
+        useMyRoomStore.getState().rotateAiModelBy(stickX * 2.2 * cDt)
+      }
     }
 
     camera.getWorldPosition(_worldPos)

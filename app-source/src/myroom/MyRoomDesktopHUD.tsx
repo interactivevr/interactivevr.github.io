@@ -65,6 +65,7 @@ export function MyRoomDesktopHUD() {
   const aiDressupStyle = useMyRoomStore((s) => s.aiDressupStyle)
   const aiCanProduceObjects = useMyRoomStore((s) => s.aiCanProduceObjects)
   const aiAutoRotate = useMyRoomStore((s) => s.aiAutoRotate)
+  const aiYawDeg = useMyRoomStore((s) => s.aiYawDeg)
   const selectedCraftId = useMyRoomStore((s) => s.selectedCraftId)
   const selectedDecorId = useMyRoomStore((s) => s.selectedDecorId)
   const showSelfBody = useMyRoomStore((s) => s.showSelfBody)
@@ -259,15 +260,28 @@ export function MyRoomDesktopHUD() {
           <button
             type="button"
             className="hud-btn"
-            title="Rotate Model Left 45°"
+            title="Rotate Opponent Left 45° (Key J)"
             onClick={() => useMyRoomStore.getState().rotateAiModelBy(-Math.PI * 0.25)}
           >
             ⟲ -45°
           </button>
+          <input
+            type="range"
+            min={0}
+            max={359}
+            value={aiYawDeg}
+            title={`Rotate Opponent Avatar (${aiYawDeg}°)`}
+            aria-label="Rotate opponent avatar degrees"
+            onChange={(e) => useMyRoomStore.getState().setAiYawDeg(Number(e.target.value))}
+            style={{ width: '78px', accentColor: '#38bdf8', cursor: 'pointer' }}
+          />
+          <span style={{ fontSize: '0.72rem', color: '#94a3b8', minWidth: '30px', textAlign: 'center' }}>
+            {aiYawDeg}°
+          </span>
           <button
             type="button"
             className="hud-btn"
-            title="Rotate Model Right 45°"
+            title="Rotate Opponent Right 45° (Key L)"
             onClick={() => useMyRoomStore.getState().rotateAiModelBy(Math.PI * 0.25)}
           >
             ⟳ +45°
@@ -387,6 +401,55 @@ export function MyRoomDesktopHUD() {
               >
                 Dressup: {aiDressupStyle === 'sport' ? 'Sporty' : aiDressupStyle === 'nerdy' ? 'Nerdy' : 'Chic'}
               </button>
+              <div
+                style={{
+                  gridColumn: '1 / -1',
+                  background: 'rgba(15, 23, 42, 0.72)',
+                  border: '1px solid rgba(56, 189, 248, 0.28)',
+                  borderRadius: '8px',
+                  padding: '7px 9px',
+                  display: 'grid',
+                  gap: '5px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.73rem' }}>
+                  <span>Rotate Opponent Avatar</span>
+                  <strong style={{ color: '#38bdf8' }}>{aiYawDeg}°</strong>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={359}
+                  value={aiYawDeg}
+                  onChange={(e) => useMyRoomStore.getState().setAiYawDeg(Number(e.target.value))}
+                  style={{ width: '100%', accentColor: '#38bdf8', cursor: 'pointer' }}
+                />
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px' }}>
+                  {[
+                    { label: 'Front 0°', deg: 0 },
+                    { label: 'Side 90°', deg: 90 },
+                    { label: 'Back 180°', deg: 180 },
+                    { label: 'Side 270°', deg: 270 },
+                  ].map((p) => (
+                    <button
+                      key={p.deg}
+                      type="button"
+                      className="hud-btn"
+                      style={{
+                        padding: '4px 4px',
+                        fontSize: '0.69rem',
+                        background: Math.abs(aiYawDeg - p.deg) <= 2 ? '#0284c7' : undefined,
+                      }}
+                      onClick={() => useMyRoomStore.getState().setAiYawDeg(p.deg)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
+                  Tip: Left-drag directly on avatar, Right-drag, or hold J / L keys.
+                </div>
+              </div>
               <button
                 type="button"
                 className="hud-btn"

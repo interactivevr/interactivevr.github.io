@@ -319,6 +319,10 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
       ai.yaw += cDt * 0.95
     }
   }
+  const curDeg = ((Math.round((ai.yaw * 180) / Math.PI) % 360) + 360) % 360
+  if (Math.abs(curDeg - st.aiYawDeg) >= (st.aiAutoRotate ? 2 : 1)) {
+    useMyRoomStore.setState({ aiYawDeg: curDeg })
+  }
 
   // Smooth spring decay for head & torso tactile reactions
   ai.headReactPitch *= Math.pow(0.08, cDt)

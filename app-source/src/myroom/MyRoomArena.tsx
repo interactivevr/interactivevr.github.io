@@ -129,16 +129,59 @@ function RemoteARPeerAvatar({ peer }: { peer: PeerInfo }) {
 
 function ComputerAROpponentAvatar() {
   const aiGender = useGameStore((s) => s.aiAvatarGender)
+  const inXR = useGameStore((s) => s.inXR)
   const aiDressupStyle = useMyRoomStore((s) => s.aiDressupStyle)
+  const aiAutoRotate = useMyRoomStore((s) => s.aiAutoRotate)
+  const hitProxyRef = useRef<THREE.Group>(null)
+  const [hovered, setHovered] = useState(false)
+
+  useFrame(() => {
+    if (hitProxyRef.current) {
+      const p = myRoomRuntime.ai.pos
+      hitProxyRef.current.position.set(p[0], p[1], p[2])
+    }
+  })
+
   return (
     <group
+      onPointerOver={(e) => {
+        if (!inXR) {
+          e.stopPropagation()
+          setHovered(true)
+          if (!myRoomRuntime.ai.desktopRotateDrag) {
+            document.body.style.cursor = 'grab'
+          }
+        }
+      }}
+      onPointerOut={() => {
+        setHovered(false)
+        if (!myRoomRuntime.ai.desktopRotateDrag) {
+          document.body.style.cursor = ''
+        }
+      }}
       onPointerDown={(e) => {
         if (!useGameStore.getState().inXR && e.button === 0) {
           e.stopPropagation()
           myRoomRuntime.ai.desktopRotateDrag = true
+          document.body.style.cursor = 'grabbing'
         }
       }}
     >
+      {/* Tracked wide invisible body proxy collider + turntable hover ring so drag rotation never misses */}
+      <group ref={hitProxyRef}>
+        {!inXR && (
+          <mesh position={[0, 0.88, 0]}>
+            <cylinderGeometry args={[0.32, 0.32, 1.76, 16]} />
+            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+          </mesh>
+        )}
+        {!inXR && (hovered || aiAutoRotate) && (
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.008, 0]}>
+            <ringGeometry args={[0.34, 0.4, 32]} />
+            <meshBasicMaterial color="#38bdf8" transparent opacity={0.65} side={THREE.DoubleSide} />
+          </mesh>
+        )}
+      </group>
       <RealisticHumanAvatar
         seedKey={`computer-roommate-${aiGender}`}
         displayName={aiGender === 'female' ? 'AI COMPANION (F)' : 'AI COMPANION (M)'}
@@ -223,6 +266,7 @@ function InARCraftStudioPanel() {
   const showAiOpponent = useMyRoomStore((s) => s.showAiOpponent)
   const aiDressupStyle = useMyRoomStore((s) => s.aiDressupStyle)
   const aiCanProduceObjects = useMyRoomStore((s) => s.aiCanProduceObjects)
+  const aiAutoRotate = useMyRoomStore((s) => s.aiAutoRotate)
   const selectedCraftId = useMyRoomStore((s) => s.selectedCraftId)
   const showcaseOpen = useMyRoomStore((s) => s.showcaseOpen)
   const decorCount = useMyRoomStore((s) => s.decorCount)
@@ -321,8 +365,8 @@ function InARCraftStudioPanel() {
 
   return (
     <group position={panelPoseRef.current.pos} rotation={[0, panelPoseRef.current.yaw, 0]}>
-      <mesh>
-        <boxGeometry args={[1.06, 1.12, 0.025]} />
+      <mesh position={[0, -0.05, 0]}>
+        <boxGeometry args={[1.06, 1.24, 0.025]} />
         <meshStandardMaterial color="#0b1220" transparent opacity={0.92} roughness={0.5} />
       </mesh>
       <TextLabel position={[0, 0.48, 0.018]} fontSize={0.032} color="#38bdf8">
@@ -613,6 +657,36 @@ function InARCraftStudioPanel() {
         onClick={() => {
           void xrStore.getState().session?.end()
         }}
+      />
+
+      {/* Row 8: Opponent Avatar 360° Rotation & Inspection Controls (for VR/AR & Desktop) */}
+      <ARStudioButton
+        position={[-0.36, -0.49, 0.016]}
+        width={0.22}
+        label="ROTATE -45°"
+        color="#0369a1"
+        onClick={() => useMyRoomStore.getState().rotateAiModelBy(-Math.PI * 0.25)}
+      />
+      <ARStudioButton
+        position={[-0.12, -0.49, 0.016]}
+        width={0.22}
+        label="ROTATE +45°"
+        color="#0369a1"
+        onClick={() => useMyRoomStore.getState().rotateAiModelBy(Math.PI * 0.25)}
+      />
+      <ARStudioButton
+        position={[0.12, -0.49, 0.016]}
+        width={0.22}
+        label={aiAutoRotate ? 'SPIN: ON' : 'SPIN: OFF'}
+        color={aiAutoRotate ? '#0ea5e9' : '#475569'}
+        onClick={() => useMyRoomStore.getState().setAiAutoRotate(!aiAutoRotate)}
+      />
+      <ARStudioButton
+        position={[0.36, -0.49, 0.016]}
+        width={0.22}
+        label="RESET 0°"
+        color="#334155"
+        onClick={() => useMyRoomStore.getState().resetAiModelRotation()}
       />
     </group>
   )

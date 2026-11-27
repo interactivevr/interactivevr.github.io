@@ -39,7 +39,7 @@ export interface UnityHumanoidCharacterProps {
   accentColor?: string
   pantsColor?: string
   shoeColor?: string
-  uniformStyle?: 'casual' | 'sport' | 'cricket'
+  uniformStyle?: 'casual' | 'nerdy' | 'sport' | 'cricket'
   lookProfile?: AthleteLookProfile
   hideHead?: boolean
   firstPersonMode?: boolean

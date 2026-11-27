@@ -482,6 +482,7 @@ export interface MyRoomStoreState {
   aiDressupStyle: MyRoomAIDressupStyle
   aiCanProduceObjects: boolean
   aiAutoRotate: boolean
+  aiYawDeg: number
   showcaseOpen: boolean
   selectedCraftId: string | null
   selectedDecorId: string | null
@@ -510,6 +511,7 @@ export interface MyRoomStoreState {
   setAiCanProduceObjects: (enabled: boolean) => void
   setAiAutoRotate: (enabled: boolean) => void
   rotateAiModelBy: (deltaYaw: number) => void
+  setAiYawDeg: (deg: number) => void
   resetAiModelRotation: () => void
   setShowcaseOpen: (open: boolean) => void
   setSelectedCraftId: (id: string | null) => void
@@ -549,6 +551,7 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
   aiDressupStyle: 'chic',
   aiCanProduceObjects: false,
   aiAutoRotate: false,
+  aiYawDeg: 0,
   showcaseOpen: false,
   selectedCraftId: null,
   selectedDecorId: null,
@@ -616,11 +619,17 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
     }),
   rotateAiModelBy: (deltaYaw) => {
     myRoomRuntime.ai.yaw += deltaYaw
-    set({ aiAutoRotate: false })
+    const aiYawDeg = ((Math.round((myRoomRuntime.ai.yaw * 180) / Math.PI) % 360) + 360) % 360
+    set({ aiAutoRotate: false, aiYawDeg })
+  },
+  setAiYawDeg: (deg) => {
+    const normDeg = ((Math.round(deg) % 360) + 360) % 360
+    myRoomRuntime.ai.yaw = (normDeg * Math.PI) / 180
+    set({ aiAutoRotate: false, aiYawDeg: normDeg })
   },
   resetAiModelRotation: () => {
     myRoomRuntime.ai.yaw = 0
-    set({ aiAutoRotate: false, statusHint: 'Reset model facing forward' })
+    set({ aiAutoRotate: false, aiYawDeg: 0, statusHint: 'Reset model facing forward' })
   },
   bumpDecorVersion: () =>
     set((s) => ({
