@@ -3,11 +3,113 @@ import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { voiceAudio } from '../net/voiceAudio'
 import { runtimeState, useGameStore } from '../store/useGameStore'
-import { PeerInfo } from '../types/game'
+import { HandSide, PeerInfo } from '../types/game'
 import { TextLabel as Text } from './TextLabel'
 
 const _targetVec = new THREE.Vector3()
 const _targetQuat = new THREE.Quaternion()
+
+interface FingerLayout {
+  basePos: [number, number, number]
+  proxLen: number
+  distLen: number
+  radius: number
+  isThumb?: boolean
+}
+
+const FINGER_LAYOUTS: FingerLayout[] = [
+  { basePos: [0.036, -0.005, -0.01], proxLen: 0.028, distLen: 0.022, radius: 0.008, isThumb: true },
+  { basePos: [0.024, 0, -0.042], proxLen: 0.036, distLen: 0.028, radius: 0.0072 },
+  { basePos: [0.008, 0, -0.045], proxLen: 0.04, distLen: 0.032, radius: 0.0075 },
+  { basePos: [-0.008, 0, -0.042], proxLen: 0.037, distLen: 0.029, radius: 0.007 },
+  { basePos: [-0.024, 0, -0.036], proxLen: 0.029, distLen: 0.023, radius: 0.0062 },
+]
+
+function ArticulatedAvatarHand({
+  side,
+  color,
+  curlsRef,
+  grabbingRef,
+}: {
+  side: HandSide
+  color: string
+  curlsRef: React.MutableRefObject<[number, number, number, number, number]>
+  grabbingRef: React.MutableRefObject<boolean>
+}) {
+  const proxRefs = useRef<Array<THREE.Group | null>>([])
+  const distRefs = useRef<Array<THREE.Group | null>>([])
+  const palmMatRef = useRef<THREE.MeshStandardMaterial>(null)
+
+  const mirrorSign = side === 'left' ? 1 : -1
+
+  useFrame(() => {
+    const curls = curlsRef.current
+    const grabbing = grabbingRef.current
+    if (palmMatRef.current) {
+      palmMatRef.current.emissive.set(grabbing ? '#34d399' : color)
+      palmMatRef.current.emissiveIntensity = grabbing ? 0.55 : 0.15
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const curl = curls[i] ?? 0
+      const prox = proxRefs.current[i]
+      const dist = distRefs.current[i]
+      if (i === 0) {
+        // Thumb flexes inward across palm
+        if (prox) {
+          prox.rotation.z = mirrorSign * (0.45 + curl * 0.55)
+          prox.rotation.x = -0.35 - curl * 0.65
+        }
+        if (dist) {
+          dist.rotation.x = -curl * 0.9
+        }
+      } else {
+        // Index, middle, ring, pinky curl downward around local X
+        if (prox) prox.rotation.x = -curl * 1.35
+        if (dist) dist.rotation.x = -curl * 1.4
+      }
+    }
+  })
+
+  return (
+    <group>
+      {/* Palm */}
+      <mesh>
+        <boxGeometry args={[0.068, 0.022, 0.076]} />
+        <meshStandardMaterial ref={palmMatRef} color={color} roughness={0.38} />
+      </mesh>
+      {/* 5 Articulated Fingers */}
+      {FINGER_LAYOUTS.map((f, idx) => {
+        const bx = f.basePos[0] * mirrorSign
+        return (
+          <group
+            key={idx}
+            ref={(el) => {
+              proxRefs.current[idx] = el
+            }}
+            position={[bx, f.basePos[1], f.basePos[2]]}
+          >
+            <mesh position={[0, 0, -f.proxLen / 2]} rotation={[Math.PI / 2, 0, 0]}>
+              <cylinderGeometry args={[f.radius * 0.9, f.radius, f.proxLen, 8]} />
+              <meshStandardMaterial color={color} roughness={0.38} />
+            </mesh>
+            <group
+              ref={(el) => {
+                distRefs.current[idx] = el
+              }}
+              position={[0, 0, -f.proxLen]}
+            >
+              <mesh position={[0, 0, -f.distLen / 2]} rotation={[Math.PI / 2, 0, 0]}>
+                <cylinderGeometry args={[f.radius * 0.72, f.radius * 0.88, f.distLen, 8]} />
+                <meshStandardMaterial color="#e0f2fe" roughness={0.35} />
+              </mesh>
+            </group>
+          </group>
+        )
+      })}
+    </group>
+  )
+}
 
 function RemoteAvatar({ peer }: { peer: PeerInfo }) {
   const headRef = useRef<THREE.Group>(null)
@@ -16,6 +118,11 @@ function RemoteAvatar({ peer }: { peer: PeerInfo }) {
   const rightHandRef = useRef<THREE.Group>(null)
   const voiceRingRef = useRef<THREE.Mesh>(null)
   const mittAuraRef = useRef<THREE.Mesh>(null)
+
+  const leftCurlsRef = useRef<[number, number, number, number, number]>([0, 0, 0, 0, 0])
+  const rightCurlsRef = useRef<[number, number, number, number, number]>([0, 0, 0, 0, 0])
+  const leftGrabbingRef = useRef(false)
+  const rightGrabbingRef = useRef(false)
 
   useEffect(() => {
     if (headRef.current) {
@@ -72,6 +179,14 @@ function RemoteAvatar({ peer }: { peer: PeerInfo }) {
       ]
     }
 
+    // Smooth finger curl interpolation
+    for (let i = 0; i < 5; i++) {
+      leftCurlsRef.current[i] += (target.leftCurls[i] - leftCurlsRef.current[i]) * alpha
+      rightCurlsRef.current[i] += (target.rightCurls[i] - rightCurlsRef.current[i]) * alpha
+    }
+    leftGrabbingRef.current = target.leftGrabbing
+    rightGrabbingRef.current = target.rightGrabbing
+
     if (voiceRingRef.current) {
       const lvl = peer.speakingLevel
       voiceRingRef.current.visible = lvl > 0.07
@@ -122,20 +237,24 @@ function RemoteAvatar({ peer }: { peer: PeerInfo }) {
         </group>
       </group>
 
-      {/* Left Hand */}
+      {/* Left Articulated Hand */}
       <group ref={leftHandRef} position={[-0.25, 1.25, -0.3]}>
-        <mesh>
-          <sphereGeometry args={[0.065, 14, 12]} />
-          <meshStandardMaterial color={peer.color} roughness={0.4} />
-        </mesh>
+        <ArticulatedAvatarHand
+          side="left"
+          color={peer.color}
+          curlsRef={leftCurlsRef}
+          grabbingRef={leftGrabbingRef}
+        />
       </group>
 
-      {/* Right Hand / Catching Mitt */}
+      {/* Right Articulated Hand / Catching Mitt */}
       <group ref={rightHandRef} position={[0.25, 1.25, -0.3]}>
-        <mesh>
-          <sphereGeometry args={[0.072, 14, 12]} />
-          <meshStandardMaterial color={peer.color} roughness={0.4} />
-        </mesh>
+        <ArticulatedAvatarHand
+          side="right"
+          color={peer.color}
+          curlsRef={rightCurlsRef}
+          grabbingRef={rightGrabbingRef}
+        />
         <mesh ref={mittAuraRef} visible={false}>
           <sphereGeometry args={[0.17, 14, 10]} />
           <meshBasicMaterial color="#34d399" transparent opacity={0.28} wireframe />

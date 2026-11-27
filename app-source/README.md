@@ -25,11 +25,10 @@ npm run dev
 
 ## Controls
 
-- **Meta Quest VR**:
-  - **Grab / Catch**: Hold **Grip** (`squeeze`) or **Trigger** (`select`) — or **Pinch** in hand tracking — when a ball enters your hand catch ring.
-  - **Throw**: Swing your arm and release Grip / Trigger / Pinch.
-  - **Move / Turn**: Left thumbstick moves; right thumbstick snap-turns (`45°`).
-  - **In-World VR Menu**: Point controller ray or pinch-ray at the floating side-rail console to Reset Balls, Rotate Roles, Switch Mode, Mute Mic, or Exit VR.
+- **Meta Quest VR (Hand Tracking & Controllers)**:
+  - **Real Hand Tracking**: Renders your full 25-joint articulated hand with live finger movement (and syncs 5-finger curl to peers). Close your hand into a fist or pinch thumb + index near a ball to grab/catch; swing and open your hand to release and throw.
+  - **Controllers**: Hold **Grip** (`squeeze`) or **Trigger** (`select`) to grab/catch and release to throw; left thumbstick moves, right thumbstick snap-turns (`45°`).
+  - **In-World VR Menu**: Point controller ray or hand pinch-ray/touch at the floating side-rail console to Reset Balls, Rotate Roles, Switch Mode, Mute Mic, or Exit VR.
 - **PC Browser**:
   - **Aim & Move**: Click the arena to lock mouse aim; move with `WASD` or Arrow keys (`Esc` unlocks cursor).
   - **Grab Ball**: `Left-Click` or press `F` near a ball.

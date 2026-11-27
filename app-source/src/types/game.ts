@@ -28,6 +28,8 @@ export interface PeerPose {
   leftQuat: [number, number, number, number]
   rightPos: [number, number, number]
   rightQuat: [number, number, number, number]
+  leftCurls: [number, number, number, number, number]
+  rightCurls: [number, number, number, number, number]
   leftGrabbing: boolean
   rightGrabbing: boolean
   catchingActive: boolean

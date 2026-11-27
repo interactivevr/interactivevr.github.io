@@ -200,8 +200,9 @@ export function LobbyOverlay() {
 
         <div className="controls-summary">
           <div>
-            <strong>Meta Quest VR:</strong> Squeeze <strong>Grip / Trigger</strong> (or Pinch) near a ball
-            to grab/catch, swing and release to throw. Left thumbstick moves, right stick snap-turns.
+            <strong>Meta Quest VR:</strong> Supports both <strong>Real Hand Tracking</strong> (full 25-joint
+            hand view — close hand into a fist or pinch to catch/grab, swing &amp; open hand to throw) and{' '}
+            <strong>Touch Controllers</strong> (Grip / Trigger).
           </div>
           <div>
             <strong>PC Browser:</strong> Click canvas to aim, <strong>WASD</strong> move, hold{' '}

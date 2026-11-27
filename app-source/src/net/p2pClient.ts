@@ -93,6 +93,16 @@ function packPose(pose: PeerPose): PoseArrayPayload {
     Number(pose.rightQuat[2].toFixed(3)),
     Number(pose.rightQuat[3].toFixed(3)),
     flags,
+    Math.round((pose.leftCurls[0] ?? 0) * 100),
+    Math.round((pose.leftCurls[1] ?? 0) * 100),
+    Math.round((pose.leftCurls[2] ?? 0) * 100),
+    Math.round((pose.leftCurls[3] ?? 0) * 100),
+    Math.round((pose.leftCurls[4] ?? 0) * 100),
+    Math.round((pose.rightCurls[0] ?? 0) * 100),
+    Math.round((pose.rightCurls[1] ?? 0) * 100),
+    Math.round((pose.rightCurls[2] ?? 0) * 100),
+    Math.round((pose.rightCurls[3] ?? 0) * 100),
+    Math.round((pose.rightCurls[4] ?? 0) * 100),
   ]
 }
 
@@ -123,6 +133,22 @@ function unpackPose(arr: PoseArrayPayload, target: PeerPose): void {
   target.leftGrabbing = (flags & 1) !== 0
   target.rightGrabbing = (flags & 2) !== 0
   target.catchingActive = (flags & 4) !== 0
+  if (arr.length >= 32) {
+    target.leftCurls = [
+      arr[22] / 100,
+      arr[23] / 100,
+      arr[24] / 100,
+      arr[25] / 100,
+      arr[26] / 100,
+    ]
+    target.rightCurls = [
+      arr[27] / 100,
+      arr[28] / 100,
+      arr[29] / 100,
+      arr[30] / 100,
+      arr[31] / 100,
+    ]
+  }
 }
 
 class P2PGameClient {

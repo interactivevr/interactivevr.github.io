@@ -34,6 +34,8 @@ function createEmptyPose(): PeerPose {
     leftQuat: [0, 0, 0, 1],
     rightPos: [0.22, 1.25, -0.3],
     rightQuat: [0, 0, 0, 1],
+    leftCurls: [0, 0, 0, 0, 0],
+    rightCurls: [0, 0, 0, 0, 0],
     leftGrabbing: false,
     rightGrabbing: false,
     catchingActive: false,

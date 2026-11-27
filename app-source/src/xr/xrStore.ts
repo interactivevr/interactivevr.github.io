@@ -9,8 +9,8 @@ export const xrStore = createXRStore({
     },
   },
   hand: {
-    left: true,
-    right: true,
+    left: { model: false },
+    right: { model: false },
   },
   foveation: 0.5,
   frameRate: 'high',

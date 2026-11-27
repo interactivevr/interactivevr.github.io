@@ -305,6 +305,10 @@ export function DesktopPlayerRig() {
     lp.rightGrabbing = heldId !== null || catchKeyRef.current
     lp.leftGrabbing = catchKeyRef.current
     lp.catchingActive = catchKeyRef.current
+    const rCurl = heldId !== null ? 0.85 : catchKeyRef.current ? 0.35 : 0.1
+    const lCurl = catchKeyRef.current ? 0.35 : 0.1
+    lp.rightCurls = [rCurl * 0.8, rCurl, rCurl, rCurl, rCurl]
+    lp.leftCurls = [lCurl * 0.8, lCurl, lCurl, lCurl, lCurl]
 
     // Keep locally held ball glued to desktop mitt
     if (heldId !== null) {
