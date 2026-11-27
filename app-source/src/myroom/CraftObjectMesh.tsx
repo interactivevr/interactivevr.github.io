@@ -155,6 +155,7 @@ function SingleCraftObjectView({
   const matRef = useRef<THREE.MeshStandardMaterial>(null)
   const shadowRef = useRef<THREE.Mesh>(null)
   const lastStrokeVerRef = useRef(-1)
+  const isSelected = useMyRoomStore((s) => s.selectedCraftId === obj.id)
 
   // Dedicated high-res ink canvas texture ONLY for writable Paper objects
   const paperInk = useMemo(() => {
@@ -194,7 +195,7 @@ function SingleCraftObjectView({
       const dl = Math.hypot(live.pos[0] - lp.leftPos[0], live.pos[1] - lp.leftPos[1], live.pos[2] - lp.leftPos[2])
       const dr = Math.hypot(live.pos[0] - lp.rightPos[0], live.pos[1] - lp.rightPos[1], live.pos[2] - lp.rightPos[2])
       const nearHand = Math.min(dl, dr) < live.meshData.approxRadius + 0.17
-      matRef.current.emissiveIntensity = live.isHeldByLocal ? 0.3 : nearHand ? 0.24 : 0.08
+      matRef.current.emissiveIntensity = live.isHeldByLocal ? 0.3 : isSelected ? 0.34 : nearHand ? 0.24 : 0.08
     }
 
     if (shadowRef.current) {
@@ -227,7 +228,16 @@ function SingleCraftObjectView({
 
   return (
     <group>
-      <mesh ref={meshRef} geometry={obj.meshData.geometry} castShadow receiveShadow>
+      <mesh
+        ref={meshRef}
+        geometry={obj.meshData.geometry}
+        castShadow
+        receiveShadow
+        onClick={(e) => {
+          e.stopPropagation()
+          useMyRoomStore.getState().setSelectedCraftId(obj.id)
+        }}
+      >
         <meshStandardMaterial
           ref={matRef}
           color={obj.color}

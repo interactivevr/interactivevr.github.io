@@ -60,12 +60,8 @@ export function LobbyOverlay() {
   const startSession = (targetPlatform: PlatformMode) => {
     if (joining) return
     const game = useGameStore.getState().activeGame
-    if (game === 'myroom' && !useGameStore.getState().arSupported) {
-      useGameStore
-        .getState()
-        .setStatusBanner('MyRoom Mixed Reality requires a Meta Quest or AR-supported browser.')
-      return
-    }
+    const arReady = useGameStore.getState().arSupported
+    const vrReady = useGameStore.getState().xrSupported
     const cleanRoom = roomId.trim() || 'CATCH1'
     useGameStore.getState().setRoomId(cleanRoom)
     useGameStore.getState().setPlatform(targetPlatform)
@@ -83,18 +79,21 @@ export function LobbyOverlay() {
     unlockAudioContext()
     voiceAudio.resumeContext()
 
-    // Enter WebXR AR for MyRoom, VR for Catch/Cricket, or Fullscreen on PC
-    if (game === 'myroom') {
+    // Enter WebXR AR for MyRoom (when supported), VR when requested/supported, or 3D browser view
+    if (game === 'myroom' && targetPlatform === 'vr' && arReady) {
       void xrStore.enterAR().catch(() => {
+        if (vrReady) {
+          void xrStore.enterVR().catch(() => {})
+        }
         useGameStore
           .getState()
-          .setStatusBanner('Mixed Reality AR failed to open. Please grant room & camera permissions.')
+          .setStatusBanner('Mixed Reality AR failed to open. Use Enter VR or 3D preview.')
       })
     } else if (targetPlatform === 'vr') {
       void xrStore.enterVR().catch(() => {
         useGameStore
           .getState()
-          .setStatusBanner('WebXR failed to open. Continuing in 3D browser view.')
+          .setStatusBanner('WebXR failed to open. Continuing in 3D browser view (or use ENTER VR button).')
       })
     } else if (typeof document !== 'undefined' && !document.fullscreenElement) {
       void document.documentElement.requestFullscreen?.().catch(() => {})
@@ -129,11 +128,13 @@ export function LobbyOverlay() {
                 : 'Cross-platform Meta Quest WebXR & PC Browser multiplayer with 3D spatial voice'}
             </p>
           </div>
-          <span className={`xr-pill ${(activeGame === 'myroom' ? arSupported : xrSupported) ? '' : 'muted'}`}>
+          <span className={`xr-pill ${(activeGame === 'myroom' ? arSupported || xrSupported : xrSupported) ? '' : 'muted'}`}>
             {activeGame === 'myroom'
               ? arSupported
                 ? 'Meta Quest / AR Ready'
-                : 'AR Device Only'
+                : xrSupported
+                  ? 'WebXR VR Ready'
+                  : '3D / WebXR Preview'
               : xrSupported
                 ? 'WebXR / Quest Ready'
                 : 'PC Browser Mode'}
@@ -417,25 +418,25 @@ export function LobbyOverlay() {
         </div>
 
         <div className="actions-row">
-          {activeGame !== 'myroom' && (
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={joining}
-              onClick={() => startSession('pc')}
-            >
-              Join from PC Browser
-            </button>
-          )}
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={joining}
+            onClick={() => startSession('pc')}
+          >
+            {activeGame === 'myroom' ? 'Open MyRoom 3D Preview' : 'Join from PC Browser'}
+          </button>
           <button
             type="button"
             className="btn-primary vr"
-            disabled={joining || (activeGame === 'myroom' ? !arSupported : !xrSupported)}
+            disabled={joining || (activeGame === 'myroom' ? !(arSupported || xrSupported) : !xrSupported)}
             title={
               activeGame === 'myroom'
                 ? arSupported
                   ? 'Launch Meta Quest Mixed Reality AR session'
-                  : 'MyRoom Mixed Reality requires a Meta Quest or WebXR AR-supported browser'
+                  : xrSupported
+                    ? 'Launch immersive WebXR VR session in MyRoom'
+                    : 'Open on Meta Quest Browser or WebXR device (or click ENTER VR below)'
                 : xrSupported
                   ? 'Launch immersive WebXR session on Meta Quest'
                   : 'Open on Meta Quest Browser (HTTPS) to enter VR'
@@ -445,7 +446,9 @@ export function LobbyOverlay() {
             {activeGame === 'myroom'
               ? arSupported
                 ? 'Enter Mixed Reality (Quest AR)'
-                : 'Meta Quest / AR Device Required'
+                : xrSupported
+                  ? 'Enter MyRoom VR'
+                  : 'VR/AR Unavailable Here'
               : xrSupported
                 ? 'Enter Meta Quest VR'
                 : 'VR Headset Unavailable Here'}

@@ -313,8 +313,11 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     const faceGiftYaw = Math.atan2(-(giftObj.pos[0] - ai.pos[0]), -(giftObj.pos[2] - ai.pos[2]))
     ai.yaw += normalizeAngleDelta(faceGiftYaw, ai.yaw) * Math.min(1, cDt * 5.0)
   } else {
-    // Hold steady orientation so player can walk around & inspect all 360° angles seamlessly
+    // Hold steady orientation or auto-spin smoothly if enabled in Desktop 3D Preview
     ai.isWalking = false
+    if (st.aiAutoRotate) {
+      ai.yaw += cDt * 0.95
+    }
   }
 
   // Smooth spring decay for head & torso tactile reactions
@@ -429,13 +432,13 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     return [cx, surf.y + 0.09, cz]
   }
 
-  // Welcoming open hand target if user holds/offers an item; relaxed natural side hang when idle
+  // Welcoming open hand target if user holds/offers an item; relaxed natural side hang beside hips when idle
   const offeringGift = giftObj && giftObj.isHeldByLocal
   const activeFrontTask = Boolean(offeringGift || ai.holdingObjId || ai.actionMode === 'sculpt')
-  const idleSway = Math.sin(nowSec * 1.9) * 0.012
-  const idleHandY = floorY + 0.875 - ai.sitBlend * 0.34 + idleSway
-  const idleSpread = 0.24
-  const idleFwd = ai.sitBlend * 0.14 + 0.07
+  const idleSway = Math.sin(nowSec * 1.9) * 0.009
+  const idleHandY = floorY + 0.835 - ai.sitBlend * 0.34 + idleSway
+  const idleSpread = 0.2
+  const idleFwd = ai.sitBlend * 0.14 + 0.025
 
   if (ai.heldHandByUser !== 'left') {
     if (offeringGift && giftObj) {
@@ -577,11 +580,12 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     ai.actionTimerSec = 1.2
   }
 
-  // 6. State transitions (create Clay, Paper & Cloth gently; NEVER tear or break any object!)
+  // 6. State transitions (create Clay, Paper & Cloth ONLY when aiCanProduceObjects is enabled; NEVER tear/break objects!)
+  const aiCanProduce = useMyRoomStore.getState().aiCanProduceObjects
   ai.actionTimerSec -= cDt
   if (ai.actionTimerSec <= 0 && !userInteractingWithBody && !ai.pullToUserActive) {
     if (ai.actionMode === 'idle' || ai.actionMode === 'walk') {
-      if (myRoomRuntime.objects.size < MAX_ROOM_CRAFT_OBJECTS - 3) {
+      if (aiCanProduce && myRoomRuntime.objects.size < MAX_ROOM_CRAFT_OBJECTS - 3) {
         const roll = Math.random()
         const kind: CraftMaterialKind = roll < 0.38 ? 'clay' : roll < 0.72 ? 'paper' : 'cloth'
         const preset: CraftShapePreset =

@@ -26,7 +26,9 @@ import {
   MATERIAL_PHYSICS,
 } from './types'
 import {
+  clearAllCreatedRoomContent,
   clearAllMyRoomObjects,
+  deleteRuntimeCraftObject,
   getCombinedRoomSurfaces,
   myRoomRuntime,
   spawnRuntimeCraftObject,
@@ -127,31 +129,44 @@ function RemoteARPeerAvatar({ peer }: { peer: PeerInfo }) {
 
 function ComputerAROpponentAvatar() {
   const aiGender = useGameStore((s) => s.aiAvatarGender)
+  const aiDressupStyle = useMyRoomStore((s) => s.aiDressupStyle)
   return (
-    <RealisticHumanAvatar
-      seedKey={`computer-roommate-${aiGender}`}
-      displayName={aiGender === 'female' ? 'AI COMPANION (F)' : 'AI COMPANION (M)'}
-      gender={aiGender}
-      getBodyAnchor={() => ({
-        pos: myRoomRuntime.ai.pos,
-        yaw: myRoomRuntime.ai.yaw,
-        sitBlend: myRoomRuntime.ai.sitBlend,
-        walkSpeed: myRoomRuntime.ai.isWalking ? 1 : 0,
-        walkPhase: myRoomRuntime.ai.walkPhase,
-        headPitch: myRoomRuntime.ai.headReactPitch,
-        headYaw: myRoomRuntime.ai.headReactYaw,
-        headRoll: myRoomRuntime.ai.headReactRoll,
-        torsoPitch: myRoomRuntime.ai.torsoReactPitch,
-        torsoRoll: myRoomRuntime.ai.torsoReactRoll,
-        hairPullWorld: myRoomRuntime.ai.hairPullTarget,
-        onWorldTargets: (headPos, hairPos) => {
-          myRoomRuntime.ai.headWorldPos = headPos
-          myRoomRuntime.ai.hairWorldPos = hairPos
-        },
-      })}
-      getLeftWrist={() => myRoomRuntime.ai.leftHand}
-      getRightWrist={() => myRoomRuntime.ai.rightHand}
-    />
+    <group
+      onPointerDown={(e) => {
+        if (!useGameStore.getState().inXR && e.button === 0) {
+          e.stopPropagation()
+          myRoomRuntime.ai.desktopRotateDrag = true
+        }
+      }}
+    >
+      <RealisticHumanAvatar
+        seedKey={`computer-roommate-${aiGender}`}
+        displayName={aiGender === 'female' ? 'AI COMPANION (F)' : 'AI COMPANION (M)'}
+        gender={aiGender}
+        uniformStyle={
+          aiDressupStyle === 'sport' ? 'sport' : aiDressupStyle === 'nerdy' ? 'nerdy' : 'casual'
+        }
+        getBodyAnchor={() => ({
+          pos: myRoomRuntime.ai.pos,
+          yaw: myRoomRuntime.ai.yaw,
+          sitBlend: myRoomRuntime.ai.sitBlend,
+          walkSpeed: myRoomRuntime.ai.isWalking ? 1 : 0,
+          walkPhase: myRoomRuntime.ai.walkPhase,
+          headPitch: myRoomRuntime.ai.headReactPitch,
+          headYaw: myRoomRuntime.ai.headReactYaw,
+          headRoll: myRoomRuntime.ai.headReactRoll,
+          torsoPitch: myRoomRuntime.ai.torsoReactPitch,
+          torsoRoll: myRoomRuntime.ai.torsoReactRoll,
+          hairPullWorld: myRoomRuntime.ai.hairPullTarget,
+          onWorldTargets: (headPos, hairPos) => {
+            myRoomRuntime.ai.headWorldPos = headPos
+            myRoomRuntime.ai.hairWorldPos = hairPos
+          },
+        })}
+        getLeftWrist={() => myRoomRuntime.ai.leftHand}
+        getRightWrist={() => myRoomRuntime.ai.rightHand}
+      />
+    </group>
   )
 }
 
@@ -206,6 +221,9 @@ function InARCraftStudioPanel() {
   const showRoomMesh = useMyRoomStore((s) => s.showRoomMesh)
   const showSelfBody = useMyRoomStore((s) => s.showSelfBody)
   const showAiOpponent = useMyRoomStore((s) => s.showAiOpponent)
+  const aiDressupStyle = useMyRoomStore((s) => s.aiDressupStyle)
+  const aiCanProduceObjects = useMyRoomStore((s) => s.aiCanProduceObjects)
+  const selectedCraftId = useMyRoomStore((s) => s.selectedCraftId)
   const showcaseOpen = useMyRoomStore((s) => s.showcaseOpen)
   const decorCount = useMyRoomStore((s) => s.decorCount)
   const dartGame = useMyRoomStore((s) => s.dartGame)
@@ -216,12 +234,13 @@ function InARCraftStudioPanel() {
 
   const camera = useThree((s) => s.camera)
   const panelPoseRef = useRef<{ pos: [number, number, number]; yaw: number }>({
-    pos: [-0.52, 1.18, -0.78],
-    yaw: 0.55,
+    pos: [-0.72, 1.32, -0.25],
+    yaw: 0.48,
   })
   const prevVisibleRef = useRef(false)
+  const inXR = useGameStore((s) => s.inXR)
 
-  // Dynamically anchor menu comfortably in front-left of user whenever opened (works seated or standing anywhere in room!)
+  // Dynamically anchor menu comfortably ahead-left of user whenever opened (skipping pre-snap z=5.4 default)
   useEffect(() => {
     if (vrMenuVisible && !prevVisibleRef.current) {
       camera.getWorldPosition(_rayOrigin)
@@ -231,17 +250,21 @@ function InARCraftStudioPanel() {
       _rayDir.normalize()
       const rightX = -_rayDir.z
       const rightZ = _rayDir.x
-      panelPoseRef.current = {
-        pos: [
-          _rayOrigin.x + _rayDir.x * 0.85 - rightX * 0.42,
-          Math.max(myRoomRuntime.floorY + 0.85, _rayOrigin.y - 0.14),
-          _rayOrigin.z + _rayDir.z * 0.85 - rightZ * 0.42,
-        ],
-        yaw: Math.atan2(-_rayDir.x, -_rayDir.z) + 0.42,
+      if (!inXR && Math.abs(_rayOrigin.z - 5.4) < 0.05) {
+        panelPoseRef.current = { pos: [-0.72, 1.32, -0.25], yaw: 0.48 }
+      } else {
+        panelPoseRef.current = {
+          pos: [
+            _rayOrigin.x + _rayDir.x * 1.05 - rightX * 0.46,
+            Math.max(myRoomRuntime.floorY + 0.85, _rayOrigin.y - 0.14),
+            _rayOrigin.z + _rayDir.z * 1.05 - rightZ * 0.46,
+          ],
+          yaw: Math.atan2(-_rayDir.x, -_rayDir.z) + 0.42,
+        }
       }
     }
     prevVisibleRef.current = vrMenuVisible
-  }, [vrMenuVisible, camera])
+  }, [vrMenuVisible, camera, inXR])
 
   if (!vrMenuVisible) return null
 
@@ -299,31 +322,31 @@ function InARCraftStudioPanel() {
   return (
     <group position={panelPoseRef.current.pos} rotation={[0, panelPoseRef.current.yaw, 0]}>
       <mesh>
-        <boxGeometry args={[1.06, 1.02, 0.025]} />
+        <boxGeometry args={[1.06, 1.12, 0.025]} />
         <meshStandardMaterial color="#0b1220" transparent opacity={0.92} roughness={0.5} />
       </mesh>
-      <TextLabel position={[0, 0.44, 0.018]} fontSize={0.032} color="#38bdf8">
+      <TextLabel position={[0, 0.48, 0.018]} fontSize={0.032} color="#38bdf8">
         {`MYROOM MR STUDIO  •  SURFACES: ${scannedCount}  •  OBJECTS: ${objectCount}  •  [B] HIDE`}
       </TextLabel>
-      <TextLabel position={[0, 0.38, 0.018]} fontSize={0.021} color="#fde047">
+      <TextLabel position={[0, 0.42, 0.018]} fontSize={0.021} color="#fde047">
         {statusHint || 'Pinch to Carry • Fold Paper • Tap Watch Tools • Play 6 Darts!'}
       </TextLabel>
 
       {/* Row 1: Squeezeable / Foldable Craft Materials */}
       <ARStudioButton
-        position={[-0.31, 0.27, 0.016]}
+        position={[-0.31, 0.31, 0.016]}
         label="+ CLAY (0.7kg)"
         color="#c2410c"
         onClick={() => spawnInRoom('clay', 'sphere')}
       />
       <ARStudioButton
-        position={[0, 0.27, 0.016]}
+        position={[0, 0.31, 0.016]}
         label="+ PAPER (15g)"
         color="#0284c7"
         onClick={() => spawnInRoom('paper', 'sheet')}
       />
       <ARStudioButton
-        position={[0.31, 0.27, 0.016]}
+        position={[0.31, 0.31, 0.016]}
         label="+ CLOTH (0.2kg)"
         color="#dc2626"
         onClick={() => spawnInRoom('cloth', 'towel')}
@@ -331,28 +354,28 @@ function InARCraftStudioPanel() {
 
       {/* Row 2: Heavy Rigid Building Materials (+ Thin Wide Wood Plate) & Companion Pull */}
       <ARStudioButton
-        position={[-0.36, 0.16, 0.016]}
+        position={[-0.36, 0.2, 0.016]}
         width={0.22}
         label="+ WOOD BLK"
         color="#92400e"
         onClick={() => spawnInRoom('wood', 'block')}
       />
       <ARStudioButton
-        position={[-0.12, 0.16, 0.016]}
+        position={[-0.12, 0.2, 0.016]}
         width={0.22}
         label="+ WOOD PLATE"
         color="#b45309"
         onClick={() => spawnInRoom('wood', 'plate')}
       />
       <ARStudioButton
-        position={[0.12, 0.16, 0.016]}
+        position={[0.12, 0.2, 0.016]}
         width={0.22}
         label="+ METAL BLK"
         color="#475569"
         onClick={() => spawnInRoom('metal', 'block')}
       />
       <ARStudioButton
-        position={[0.36, 0.16, 0.016]}
+        position={[0.36, 0.2, 0.016]}
         width={0.22}
         label="PULL NEAR ME"
         color="#0d9488"
@@ -364,7 +387,7 @@ function InARCraftStudioPanel() {
 
       {/* Row 3: Color, Room Scan, Hide/Show AI, AI Gender */}
       <ARStudioButton
-        position={[-0.36, 0.05, 0.016]}
+        position={[-0.36, 0.09, 0.016]}
         width={0.22}
         label="NEXT COLOR"
         color={selectedColor}
@@ -375,30 +398,31 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[-0.12, 0.05, 0.016]}
+        position={[-0.12, 0.09, 0.016]}
         width={0.22}
         label={showRoomMesh ? 'SCAN: ON' : 'SCAN: OFF'}
         color={showRoomMesh ? '#059669' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowRoomMesh(!showRoomMesh)}
       />
       <ARStudioButton
-        position={[0.12, 0.05, 0.016]}
+        position={[0.12, 0.09, 0.016]}
         width={0.22}
         label={showAiOpponent ? 'AI: VISIBLE' : 'AI: HIDDEN'}
         color={showAiOpponent ? '#0284c7' : '#64748b'}
         onClick={() => useMyRoomStore.getState().setShowAiOpponent(!showAiOpponent)}
       />
       <ARStudioButton
-        position={[0.36, 0.05, 0.016]}
+        position={[0.36, 0.09, 0.016]}
         width={0.22}
         label={`AI: ${aiGender.toUpperCase()}`}
         color="#db2777"
         onClick={() => useGameStore.getState().setAiAvatarGender(aiGender === 'male' ? 'female' : 'male')}
       />
 
-      {/* Row 4: Opponent Mode, Clear Mine, Mic */}
+      {/* Row 4: Opponent Mode, AI Object Production Toggle, Remove Selected/Last, Clear All Created */}
       <ARStudioButton
-        position={[-0.31, -0.06, 0.016]}
+        position={[-0.36, -0.02, 0.016]}
+        width={0.22}
         label={`MODE: ${opponentMode.toUpperCase()}`}
         color="#6366f1"
         onClick={() => {
@@ -407,24 +431,43 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0, -0.06, 0.016]}
-        label="CLEAR MINE"
-        color="#d97706"
-        onClick={() => clearAllMyRoomObjects(localPeerId || 'local')}
+        position={[-0.12, -0.02, 0.016]}
+        width={0.22}
+        label={aiCanProduceObjects ? 'AI PROD: ON' : 'AI PROD: OFF'}
+        color={aiCanProduceObjects ? '#059669' : '#475569'}
+        onClick={() => useMyRoomStore.getState().setAiCanProduceObjects(!aiCanProduceObjects)}
       />
       <ARStudioButton
-        position={[0.31, -0.06, 0.016]}
-        label={micEnabled ? 'MIC: ON' : 'MIC: MUTED'}
-        color={micEnabled ? '#059669' : '#dc2626'}
+        position={[0.12, -0.02, 0.016]}
+        width={0.22}
+        label={selectedCraftId ? 'DEL SEL OBJ' : 'DEL LAST OBJ'}
+        color="#ea580c"
         onClick={() => {
-          voiceAudio.setMicEnabled(!micEnabled)
-          p2pClient.broadcastProfile()
+          const keys = Array.from(myRoomRuntime.objects.keys())
+          const targetId =
+            selectedCraftId && myRoomRuntime.objects.has(selectedCraftId)
+              ? selectedCraftId
+              : keys[keys.length - 1]
+          if (targetId) {
+            deleteRuntimeCraftObject(targetId, true)
+            useMyRoomStore.getState().setStatusHint('Removed created object!')
+          }
+        }}
+      />
+      <ARStudioButton
+        position={[0.36, -0.02, 0.016]}
+        width={0.22}
+        label="CLEAR ALL OBJS"
+        color="#d97706"
+        onClick={() => {
+          clearAllMyRoomObjects()
+          useMyRoomStore.getState().setStatusHint('Removed all created craft objects!')
         }}
       />
 
       {/* Row 5: 6-Dart AR Mini-Game (Play vs AI or Peer, Relocate Board, Quick Throw) */}
       <ARStudioButton
-        position={[-0.31, -0.18, 0.016]}
+        position={[-0.31, -0.13, 0.016]}
         label={
           dartGame.active
             ? dartGame.finished
@@ -443,7 +486,7 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0, -0.18, 0.016]}
+        position={[0, -0.13, 0.016]}
         label={dartGame.active ? 'MOVE BOARD' : '6 DARTS READY'}
         color={dartGame.active ? '#0891b2' : '#334155'}
         onClick={() => {
@@ -453,7 +496,7 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.31, -0.18, 0.016]}
+        position={[0.31, -0.13, 0.016]}
         label={dartGame.active ? 'THROW DART' : '6 DARTS VS AI/PEER'}
         color={dartGame.active ? '#ca8a04' : '#334155'}
         onClick={() => {
@@ -491,24 +534,69 @@ function InARCraftStudioPanel() {
         }}
       />
 
-      {/* Row 6: Showcase Panel (Room Redesign), Self Body, Main Lobby & Exit AR */}
+      {/* Row 6: Showcase Panel, Self Body, Mic & Wipe All Room Content */}
       <ARStudioButton
-        position={[-0.36, -0.31, 0.016]}
+        position={[-0.36, -0.25, 0.016]}
         width={0.22}
         label={showcaseOpen ? 'SHOWCASE: ON' : `SHOWCASE (${decorCount})`}
         color={showcaseOpen ? '#eab308' : '#b45309'}
         onClick={() => useMyRoomStore.getState().setShowcaseOpen(!showcaseOpen)}
       />
       <ARStudioButton
-        position={[-0.12, -0.31, 0.016]}
+        position={[-0.12, -0.25, 0.016]}
         width={0.22}
         label={showSelfBody ? 'MY BODY: ON' : 'MY BODY: OFF'}
         color={showSelfBody ? '#0ea5e9' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowSelfBody(!showSelfBody)}
       />
       <ARStudioButton
-        position={[0.12, -0.31, 0.016]}
+        position={[0.12, -0.25, 0.016]}
         width={0.22}
+        label={micEnabled ? 'MIC: ON' : 'MIC: MUTED'}
+        color={micEnabled ? '#059669' : '#dc2626'}
+        onClick={() => {
+          voiceAudio.setMicEnabled(!micEnabled)
+          p2pClient.broadcastProfile()
+        }}
+      />
+      <ARStudioButton
+        position={[0.36, -0.25, 0.016]}
+        width={0.22}
+        label="WIPE EVERYTHING"
+        color="#9f1239"
+        onClick={() => {
+          clearAllCreatedRoomContent()
+          useMyRoomStore.getState().setStatusHint('Removed all created craft objects and room decor!')
+        }}
+      />
+
+      {/* Row 7: AI Dressup Style (Chic / Nerdy / Sporty), Main Lobby & Exit AR */}
+      <ARStudioButton
+        position={[-0.31, -0.37, 0.016]}
+        width={0.28}
+        label={
+          aiDressupStyle === 'sport'
+            ? 'DRESS: SPORTY'
+            : aiDressupStyle === 'nerdy'
+              ? 'DRESS: NERDY'
+              : 'DRESS: CHIC'
+        }
+        color={
+          aiDressupStyle === 'sport'
+            ? '#0284c7'
+            : aiDressupStyle === 'nerdy'
+              ? '#4338ca'
+              : '#7d293b'
+        }
+        onClick={() => {
+          const next =
+            aiDressupStyle === 'chic' ? 'nerdy' : aiDressupStyle === 'nerdy' ? 'sport' : 'chic'
+          useMyRoomStore.getState().setAiDressupStyle(next)
+        }}
+      />
+      <ARStudioButton
+        position={[0, -0.37, 0.016]}
+        width={0.28}
         label="MAIN LOBBY"
         color="#7c3aed"
         onClick={() => {
@@ -518,8 +606,8 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.36, -0.31, 0.016]}
-        width={0.22}
+        position={[0.31, -0.37, 0.016]}
+        width={0.28}
         label="EXIT AR"
         color="#b91c1c"
         onClick={() => {
@@ -533,11 +621,13 @@ function InARCraftStudioPanel() {
 export function MyRoomArena() {
   const peers = useGameStore((s) => s.peers)
   const localPeerId = useGameStore((s) => s.localPeerId)
+  const xrMode = useGameStore((s) => s.xrMode)
   const opponentMode = useMyRoomStore((s) => s.opponentMode)
   const showAiOpponent = useMyRoomStore((s) => s.showAiOpponent)
   const peerList = Object.values(peers)
   const showComputerAI =
     showAiOpponent && (opponentMode === 'computer' || (opponentMode === 'auto' && peerList.length === 0))
+  const isPassThroughAR = xrMode === 'immersive-ar'
 
   useFrame((_, delta) => {
     stepMyRoomAI(delta, localPeerId, peerList.length > 0)
@@ -545,10 +635,22 @@ export function MyRoomArena() {
 
   return (
     <group>
-      {/* Natural AR lighting without opaque background or fog so camera passthrough renders seamlessly */}
-      <hemisphereLight args={['#ffffff', '#475569', 1.15]} />
-      <directionalLight position={[3.5, 5.5, 2.5]} intensity={1.35} />
-      <directionalLight position={[-3.0, 4.0, -2.5]} intensity={0.55} color="#e0f2fe" />
+      {/* Balanced Warm Beauty Studio / AR lighting so true skin tones glow naturally without gray cast */}
+      <hemisphereLight args={['#fffdf9', '#9f8276', 1.55]} />
+      <directionalLight position={[2.8, 4.5, 3.2]} intensity={1.4} color="#fff9f2" />
+      <directionalLight position={[-2.8, 3.8, -2.5]} intensity={0.75} color="#fff5eb" />
+      <directionalLight position={[0, 1.8, 2.8]} intensity={0.75} color="#fff4ea" />
+
+      {/* Grounded virtual studio backdrop when previewing or running MyRoom in pure VR (non-passthrough) */}
+      {!isPassThroughAR && (
+        <group>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.004, 0]} receiveShadow>
+            <circleGeometry args={[6.5, 48]} />
+            <meshStandardMaterial color="#131c2e" roughness={0.85} metalness={0.05} />
+          </mesh>
+          <gridHelper args={[10, 20, '#334155', '#1e293b']} position={[0, -0.002, 0]} />
+        </group>
+      )}
 
       <RoomScanner />
       <RoomDecorLayer />

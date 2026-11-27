@@ -72,15 +72,43 @@ const FINGERS_SPEC = [
 export function UnityArticulatedHand({
   side,
   skinColor,
+  skinShadow = '#de9a7f',
+  gender = 'male',
   getCurls,
 }: {
   side: HandSide
   skinColor: string
+  skinShadow?: string
+  gender?: AvatarGender
   getCurls?: () => [number, number, number, number, number]
 }) {
+  const isFemale = gender === 'female'
   const mirror = side === 'left' ? 1 : -1
   const proxRefs = useRef<Array<THREE.Group | null>>([])
   const distRefs = useRef<Array<THREE.Group | null>>([])
+
+  const handMaterial = useMemo(
+    () =>
+      new THREE.MeshPhysicalMaterial({
+        color: skinColor,
+        roughness: isFemale ? 0.44 : 0.5,
+        metalness: 0.0,
+        sheen: isFemale ? 0.52 : 0.2,
+        sheenRoughness: 0.58,
+        sheenColor: isFemale ? '#ff9d8a' : '#e0a28c',
+        clearcoat: isFemale ? 0.08 : 0.02,
+        clearcoatRoughness: 0.48,
+        emissive: isFemale ? skinShadow : skinColor,
+        emissiveIntensity: isFemale ? 0.16 : 0.08,
+      }),
+    [skinColor, skinShadow, isFemale]
+  )
+
+  useEffect(() => {
+    return () => {
+      handMaterial.dispose()
+    }
+  }, [handMaterial])
 
   useFrame(() => {
     const curls = getCurls?.() ?? [0.22, 0.25, 0.28, 0.3, 0.34]
@@ -102,16 +130,14 @@ export function UnityArticulatedHand({
   })
 
   return (
-    <group>
-      {/* Anatomical Metacarpal Palm */}
-      <mesh position={[0, -0.024, 0.002]} scale={[1.02, 1.32, 0.4]}>
-        <sphereGeometry args={[0.024, 14, 12]} />
-        <meshStandardMaterial color={skinColor} roughness={0.44} />
+    <group position={[0, 0.014, 0]}>
+      {/* Anatomical Metacarpal Palm meeting forearm wrist seamlessly */}
+      <mesh position={[0, -0.022, 0.002]} scale={[0.98, 1.32, 0.38]} material={handMaterial}>
+        <sphereGeometry args={[0.022, 14, 12]} />
       </mesh>
       {/* Thenar thumb cushion on inner palm */}
-      <mesh position={[mirror * 0.015, -0.016, 0.005]} scale={[0.72, 0.95, 0.6]}>
-        <sphereGeometry args={[0.014, 10, 8]} />
-        <meshStandardMaterial color={skinColor} roughness={0.46} />
+      <mesh position={[mirror * 0.014, -0.015, 0.005]} scale={[0.7, 0.92, 0.58]} material={handMaterial}>
+        <sphereGeometry args={[0.013, 10, 8]} />
       </mesh>
 
       {FINGERS_SPEC.map((f, idx) => (
@@ -122,9 +148,8 @@ export function UnityArticulatedHand({
           }}
           position={[f.base[0] * mirror, f.base[1], f.base[2]]}
         >
-          <mesh position={[0, -f.prox * 0.5, 0]}>
+          <mesh position={[0, -f.prox * 0.5, 0]} material={handMaterial}>
             <capsuleGeometry args={[f.r, f.prox, 6, 10]} />
-            <meshStandardMaterial color={skinColor} roughness={0.44} />
           </mesh>
           <group
             ref={(el) => {
@@ -132,9 +157,8 @@ export function UnityArticulatedHand({
             }}
             position={[0, -f.prox, 0]}
           >
-            <mesh position={[0, -f.dist * 0.5, 0]}>
+            <mesh position={[0, -f.dist * 0.5, 0]} material={handMaterial}>
               <capsuleGeometry args={[f.r * 0.84, f.dist, 6, 10]} />
-              <meshStandardMaterial color={skinColor} roughness={0.44} />
             </mesh>
           </group>
         </group>
@@ -221,18 +245,56 @@ export function UnityHumanoidCharacter({
 }: UnityHumanoidCharacterProps) {
   const isFemale = gender === 'female'
   const isCasual = uniformStyle === 'casual'
+  const isNerdy = uniformStyle === 'nerdy'
   const profile = useMemo(
     () => lookProfile ?? getAthleteProfile(seedKey, gender),
     [lookProfile, seedKey, gender]
   )
 
-  const resolvedTop = outfitColor ?? (isCasual ? '#1e2438' : isFemale ? '#be185d' : '#1d4ed8')
-  const resolvedAccent = accentColor ?? (isCasual ? '#d94816' : isFemale ? '#fbcfe8' : '#38bdf8')
-  const resolvedPants = pantsColor ?? (isCasual ? '#1b2133' : isFemale ? '#1e293b' : '#0f172a')
-  const resolvedShoes = shoeColor ?? (isCasual ? '#3f2518' : '#f8fafc')
+  const resolvedTop =
+    outfitColor ??
+    (isNerdy
+      ? '#24344d'
+      : isCasual
+        ? isFemale
+          ? '#f4efe9'
+          : '#1e2438'
+        : isFemale
+          ? '#be185d'
+          : '#1d4ed8')
+  const resolvedAccent =
+    accentColor ??
+    (isNerdy
+      ? '#b91c1c'
+      : isCasual
+        ? isFemale
+          ? '#e0b86b'
+          : '#d94816'
+        : isFemale
+          ? '#fbcfe8'
+          : '#38bdf8')
+  const resolvedPants =
+    pantsColor ??
+    (isNerdy
+      ? '#263b5e'
+      : isCasual
+        ? isFemale
+          ? '#7d293b'
+          : '#1b2133'
+        : isFemale
+          ? '#1e293b'
+          : '#0f172a')
+  const resolvedShoes =
+    shoeColor ??
+    (isNerdy ? '#4a2818' : isCasual ? (isFemale ? '#1f191b' : '#3f2518') : '#f8fafc')
 
   const rigSpec = useMemo(() => getUnityRigSpec(gender), [gender])
-  const { rootBone, bones, skeleton } = useMemo(() => createUnitySkeleton(rigSpec), [rigSpec])
+  // Recreate rest skeleton together with bodyGeo so mesh.bind(skeleton) ALWAYS computes clean rest boneInverses
+  // even when toggling dressup styles dynamically at runtime (fixes detached wrists / twisted shoulders)!
+  const { rootBone, bones, skeleton } = useMemo(
+    () => createUnitySkeleton(rigSpec),
+    [rigSpec, firstPersonMode, uniformStyle]
+  )
   const bodyGeo = useMemo(
     () => buildUnityBodyGeometry(rigSpec, firstPersonMode, uniformStyle),
     [rigSpec, firstPersonMode, uniformStyle]
@@ -254,77 +316,95 @@ export function UnityHumanoidCharacter({
 
   const materials = useMemo(
     () => [
-      // 0: Smooth Fair Skin
-      new THREE.MeshStandardMaterial({
-        color: profile.skinColor,
-        roughness: isFemale ? 0.42 : 0.48,
-        metalness: 0.01,
-        emissive: isFemale ? profile.skinColor : '#000000',
-        emissiveIntensity: isFemale ? 0.06 : 0,
+      // 0: Warm Living Subsurface Skin matching sculpted head & hands seamlessly
+      new THREE.MeshPhysicalMaterial({
+        color: '#ffffff',
+        map: textures.skinAlbedo,
+        bumpMap: textures.skinBump,
+        bumpScale: 0.0005,
+        vertexColors: isFemale,
+        roughness: isFemale ? 0.44 : 0.52,
+        metalness: 0.0,
+        sheen: isFemale ? 0.52 : 0.2,
+        sheenRoughness: 0.58,
+        sheenColor: isFemale ? '#ff9d8a' : '#e0a28c',
+        clearcoat: isFemale ? 0.08 : 0.02,
+        clearcoatRoughness: 0.48,
+        emissive: isFemale ? profile.skinShadow : '#000000',
+        emissiveIntensity: isFemale ? 0.16 : 0,
       }),
-      // 1: Knit Sweater Vest / Upper Garment
+      // 1: Cropped Ribbed Mock-Neck Knit Top / Nerdy Argyle Vest / Athletic Top
       new THREE.MeshStandardMaterial({
         map: textures.clothAlbedo,
         bumpMap: textures.clothBump,
-        bumpScale: 0.003,
-        roughness: isCasual ? 0.76 : 0.68,
-        metalness: 0.03,
+        bumpScale: 0.0025,
+        roughness: isCasual || isNerdy ? 0.8 : 0.68,
+        metalness: 0.02,
+        side: (isCasual || isNerdy) && isFemale ? THREE.DoubleSide : THREE.FrontSide,
       }),
-      // 2: Accordion Pleated Skirt / Tailored Trousers
+      // 2: Accordion Pleated Burgundy or Plaid Mini Skirt / Tailored Trousers
       new THREE.MeshStandardMaterial({
         map: textures.pantsAlbedo,
         bumpMap: textures.clothBump,
         bumpScale: 0.0025,
-        roughness: 0.74,
+        roughness: 0.76,
         metalness: 0.03,
-        side: isCasual && isFemale ? THREE.DoubleSide : THREE.FrontSide,
+        side: (isCasual || isNerdy) && isFemale ? THREE.DoubleSide : THREE.FrontSide,
       }),
-      // 3: Dark Brown Leather Loafers / Sneakers
+      // 3: Espresso Leather Boots / Penny Loafers / Sneakers
       new THREE.MeshStandardMaterial({
         color: resolvedShoes,
-        roughness: isCasual ? 0.34 : 0.42,
-        metalness: isCasual ? 0.14 : 0.08,
+        roughness: isCasual || isNerdy ? 0.34 : 0.42,
+        metalness: isCasual || isNerdy ? 0.14 : 0.08,
       }),
-      // 4: Outsole / Belt / Trim Accent
+      // 4: Faux-Leather Belt & Shorts Liner / Boot Sole / Trim Accent
       new THREE.MeshStandardMaterial({
-        color: isCasual ? '#1f1612' : resolvedAccent,
-        roughness: 0.55,
-        metalness: 0.1,
+        color: isCasual || isNerdy ? (isFemale && isCasual ? '#1f191b' : '#1f1612') : resolvedAccent,
+        roughness: 0.44,
+        metalness: 0.12,
       }),
-      // 5: Crisp White Short-Sleeve Shirt (casual) or Uniform Top Match (sport/cricket)
-      isCasual
+      // 5: Fitted Knit Sleeves (female chic) / Crisp Shirt Sleeves (nerdy & male casual) / Uniform Match
+      isCasual && isFemale
         ? new THREE.MeshStandardMaterial({
+          map: textures.clothAlbedo,
+          bumpMap: textures.clothBump,
+          bumpScale: 0.0022,
+          roughness: 0.8,
+          metalness: 0.02,
+        })
+        : isCasual || isNerdy
+          ? new THREE.MeshStandardMaterial({
             color: '#f8fafc',
             bumpMap: textures.clothBump,
             bumpScale: 0.0018,
             roughness: 0.62,
             metalness: 0.02,
           })
-        : new THREE.MeshStandardMaterial({
+          : new THREE.MeshStandardMaterial({
             map: textures.clothAlbedo,
             bumpMap: textures.clothBump,
             bumpScale: 0.003,
             roughness: 0.68,
             metalness: 0.04,
           }),
-      // 6: Dark Charcoal Knee-High Socks (casual female) or Uniform Lower Match
-      isCasual && isFemale
+      // 6: Knee-High Socks (Charcoal in Chic, Academy Cream-Slate in Nerdy) or Uniform Lower Match
+      (isCasual || isNerdy) && isFemale
         ? new THREE.MeshStandardMaterial({
-            color: '#37353d',
-            bumpMap: textures.clothBump,
-            bumpScale: 0.0025,
-            roughness: 0.78,
-            metalness: 0.02,
-          })
+          color: isNerdy ? '#e2e8f0' : '#2b2c34',
+          bumpMap: textures.clothBump,
+          bumpScale: 0.0025,
+          roughness: 0.8,
+          metalness: 0.02,
+        })
         : new THREE.MeshStandardMaterial({
-            map: textures.pantsAlbedo,
-            bumpMap: textures.clothBump,
-            bumpScale: 0.003,
-            roughness: 0.78,
-            metalness: 0.03,
-          }),
+          map: textures.pantsAlbedo,
+          bumpMap: textures.clothBump,
+          bumpScale: 0.003,
+          roughness: 0.78,
+          metalness: 0.03,
+        }),
     ],
-    [profile.skinColor, textures, resolvedShoes, resolvedAccent, isFemale, isCasual]
+    [profile.skinShadow, textures, resolvedShoes, resolvedAccent, isFemale, isCasual, isNerdy]
   )
 
   const skinnedMesh = useMemo(() => {
@@ -340,6 +420,8 @@ export function UnityHumanoidCharacter({
   useEffect(() => {
     return () => {
       bodyGeo.dispose()
+      textures.skinAlbedo.dispose()
+      textures.skinBump.dispose()
       textures.clothAlbedo.dispose()
       textures.clothBump.dispose()
       textures.pantsAlbedo.dispose()
@@ -570,72 +652,85 @@ export function UnityHumanoidCharacter({
     <group ref={charRootRef}>
       <primitive object={skinnedMesh} />
 
-      {/* Bone-attached Casual Uniform Details: Crisp White Turned Shirt Collar + Orange-Red Ribbon Bow / Tie */}
-      <group ref={chestMountRef} visible={isCasual && !firstPersonMode}>
-        {isCasual && !firstPersonMode && (
+      {/* Bone-attached Upper Dress Accents: Chic Gold Pendant (Chic Female) or Crisp Collar & Tie/Bow (Nerdy/Male) */}
+      <group ref={chestMountRef} visible={(isCasual || isNerdy) && !firstPersonMode}>
+        {(isCasual || isNerdy) && !firstPersonMode && (
           <group position={[0, chestLocalCollarY, 0]}>
-            {/* White shirt collar band wrapping neck base */}
-            <mesh position={[0, 0.008, 0.005]} rotation={[0.14, 0, 0]}>
-              <cylinderGeometry
-                args={[isFemale ? 0.05 : 0.064, isFemale ? 0.068 : 0.084, 0.028, 18, 1, true]}
-              />
-              <meshStandardMaterial color="#f8fafc" roughness={0.55} side={THREE.DoubleSide} />
-            </mesh>
-            {/* Left & Right Folded Crisp White Shirt Collar Lapels */}
-            {[-1, 1].map((side) => (
-              <mesh
-                key={side}
-                position={[side * (isFemale ? 0.034 : 0.044), -0.014, isFemale ? -0.06 : -0.072]}
-                rotation={[0.48, side * -0.45, side * -0.48]}
-              >
-                <boxGeometry args={[isFemale ? 0.038 : 0.046, 0.04, 0.007]} />
-                <meshStandardMaterial color="#ffffff" roughness={0.5} />
-              </mesh>
-            ))}
-
-            {/* Bright Orange-Red Ribbon Bow (Female) or Necktie (Male) at Collar V */}
-            {isFemale ? (
-              <group position={[0, -0.044, -0.092]} rotation={[-0.28, 0, 0]}>
-                {/* Center Ribbon Knot */}
-                <mesh position={[0, 0.002, -0.004]} scale={[1.1, 1.0, 0.72]}>
-                  <boxGeometry args={[0.02, 0.02, 0.016]} />
-                  <meshStandardMaterial color="#dc4a19" roughness={0.44} />
+            {isFemale && isCasual ? (
+              <group position={[0, -0.025, -0.004]}>
+                {/* Dainty brushed gold choker chain + oval pendant necklace over mock-neck knit */}
+                <mesh position={[0, 0.018, 0.002]} rotation={[Math.PI * 0.5 + 0.18, 0, 0]}>
+                  <torusGeometry args={[0.054, 0.0022, 8, 28]} />
+                  <meshStandardMaterial color={resolvedAccent} metalness={0.88} roughness={0.22} />
                 </mesh>
-                {/* Left & Right Pleated Bow Loops */}
-                {[-1, 1].map((side) => (
-                  <mesh
-                    key={side}
-                    position={[side * 0.028, 0.004, 0.001]}
-                    rotation={[0.06, side * 0.14, side * 0.18]}
-                    scale={[1.0, 0.72, 0.42]}
-                  >
-                    <cylinderGeometry args={[0.026, 0.014, 0.046, 10]} />
-                    <meshStandardMaterial color="#ea580c" roughness={0.42} />
-                  </mesh>
-                ))}
-                {/* Twin Hanging Ribbon Tails */}
-                {[-1, 1].map((side) => (
-                  <mesh
-                    key={side}
-                    position={[side * 0.02, -0.038, -0.004]}
-                    rotation={[-0.08, 0, side * 0.28]}
-                  >
-                    <boxGeometry args={[0.021, 0.056, 0.005]} />
-                    <meshStandardMaterial color="#c2410c" roughness={0.46} />
-                  </mesh>
-                ))}
+                <mesh position={[0, -0.022, -0.068]} scale={[0.85, 1.35, 0.45]}>
+                  <sphereGeometry args={[0.0085, 12, 10]} />
+                  <meshStandardMaterial color={resolvedAccent} metalness={0.9} roughness={0.2} />
+                </mesh>
               </group>
             ) : (
-              <group position={[0, -0.045, -0.098]} rotation={[-0.14, 0, 0]}>
-                <mesh position={[0, 0.015, -0.004]}>
-                  <boxGeometry args={[0.022, 0.022, 0.016]} />
-                  <meshStandardMaterial color="#dc4a19" roughness={0.45} />
+              <>
+                {/* White shirt collar band wrapping neck base */}
+                <mesh position={[0, 0.008, 0.005]} rotation={[0.14, 0, 0]}>
+                  <cylinderGeometry
+                    args={[isFemale ? 0.05 : 0.064, isFemale ? 0.068 : 0.084, 0.028, 18, 1, true]}
+                  />
+                  <meshStandardMaterial color="#f8fafc" roughness={0.55} side={THREE.DoubleSide} />
                 </mesh>
-                <mesh position={[0, -0.075, -0.006]} rotation={[0.05, 0, 0]}>
-                  <boxGeometry args={[0.028, 0.155, 0.008]} />
-                  <meshStandardMaterial color="#dc4a19" roughness={0.46} />
-                </mesh>
-              </group>
+                {/* Left & Right Folded Crisp White Shirt Collar Lapels */}
+                {[-1, 1].map((side) => (
+                  <mesh
+                    key={side}
+                    position={[side * (isFemale ? 0.034 : 0.044), -0.014, isFemale ? -0.06 : -0.072]}
+                    rotation={[0.48, side * -0.45, side * -0.48]}
+                  >
+                    <boxGeometry args={[isFemale ? 0.038 : 0.046, 0.04, 0.007]} />
+                    <meshStandardMaterial color="#ffffff" roughness={0.5} />
+                  </mesh>
+                ))}
+
+                {/* Preppy Academic Ribbon Bow (Female Nerdy) or Necktie (Male) */}
+                {isFemale ? (
+                  <group position={[0, -0.044, -0.092]} rotation={[-0.28, 0, 0]}>
+                    <mesh position={[0, 0.002, -0.004]} scale={[1.1, 1.0, 0.72]}>
+                      <boxGeometry args={[0.02, 0.02, 0.016]} />
+                      <meshStandardMaterial color={resolvedAccent} roughness={0.44} />
+                    </mesh>
+                    {[-1, 1].map((side) => (
+                      <mesh
+                        key={side}
+                        position={[side * 0.028, 0.004, 0.001]}
+                        rotation={[0.06, side * 0.14, side * 0.18]}
+                        scale={[1.0, 0.72, 0.42]}
+                      >
+                        <cylinderGeometry args={[0.026, 0.014, 0.046, 10]} />
+                        <meshStandardMaterial color={resolvedAccent} roughness={0.42} />
+                      </mesh>
+                    ))}
+                    {[-1, 1].map((side) => (
+                      <mesh
+                        key={side}
+                        position={[side * 0.02, -0.038, -0.004]}
+                        rotation={[-0.08, 0, side * 0.28]}
+                      >
+                        <boxGeometry args={[0.021, 0.056, 0.005]} />
+                        <meshStandardMaterial color={resolvedAccent} roughness={0.46} />
+                      </mesh>
+                    ))}
+                  </group>
+                ) : (
+                  <group position={[0, -0.045, -0.098]} rotation={[-0.14, 0, 0]}>
+                    <mesh position={[0, 0.015, -0.004]}>
+                      <boxGeometry args={[0.022, 0.022, 0.016]} />
+                      <meshStandardMaterial color="#dc4a19" roughness={0.45} />
+                    </mesh>
+                    <mesh position={[0, -0.075, -0.006]} rotation={[0.05, 0, 0]}>
+                      <boxGeometry args={[0.028, 0.155, 0.008]} />
+                      <meshStandardMaterial color="#dc4a19" roughness={0.46} />
+                    </mesh>
+                  </group>
+                )}
+              </>
             )}
           </group>
         )}
@@ -649,6 +744,7 @@ export function UnityHumanoidCharacter({
             gender={gender}
             showHair={showHair}
             allowSunglasses={allowSunglasses}
+            hasGlasses={isNerdy}
             hideNeck
             hairOffsetRef={hairOffsetRef}
           />
@@ -658,12 +754,24 @@ export function UnityHumanoidCharacter({
       {/* Bone-attached Articulated Left & Right 5-Finger Sculpted Hands */}
       <group ref={leftHandMountRef}>
         {leftHandAttachment ?? (
-          <UnityArticulatedHand side="left" skinColor={profile.skinColor} getCurls={getLeftCurls} />
+          <UnityArticulatedHand
+            side="left"
+            skinColor={profile.skinColor}
+            skinShadow={profile.skinShadow}
+            gender={gender}
+            getCurls={getLeftCurls}
+          />
         )}
       </group>
       <group ref={rightHandMountRef}>
         {rightHandAttachment ?? (
-          <UnityArticulatedHand side="right" skinColor={profile.skinColor} getCurls={getRightCurls} />
+          <UnityArticulatedHand
+            side="right"
+            skinColor={profile.skinColor}
+            skinShadow={profile.skinShadow}
+            gender={gender}
+            getCurls={getRightCurls}
+          />
         )}
       </group>
 

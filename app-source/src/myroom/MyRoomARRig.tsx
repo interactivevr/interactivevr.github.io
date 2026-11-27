@@ -66,9 +66,20 @@ export function MyRoomARRig() {
   const rightAuraRef = useRef<THREE.Mesh>(null)
 
   const camera = useThree((s) => s.camera)
+  const gl = useThree((s) => s.gl)
   const referenceSpace = useXR((s) => s.originReferenceSpace)
   const localPeerId = useGameStore((s) => s.localPeerId)
+  const inXR = useGameStore((s) => s.inXR)
   const showSelfBody = useMyRoomStore((s) => s.showSelfBody)
+
+  const desktopKeysRef = useRef<Set<string>>(new Set())
+  const desktopPosRef = useRef(new THREE.Vector3(0, 1.5, 1.35))
+  const desktopYawRef = useRef(0)
+  const desktopPitchRef = useRef(-0.1)
+  const desktopDragRef = useRef<null | 'look' | 'model'>(null)
+  const desktopEulerRef = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
+  const desktopFwdRef = useRef(new THREE.Vector3())
+  const desktopRightRef = useRef(new THREE.Vector3())
 
   const leftController = useXRInputSourceState('controller', 'left')
   const rightController = useXRInputSourceState('controller', 'right')
@@ -115,13 +126,92 @@ export function MyRoomARRig() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'KeyB' && useGameStore.getState().inXR) {
+      if (e.code === 'KeyB' || e.code === 'KeyM') {
         useGameStore.getState().toggleVrMenu()
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
+
+  // Desktop 3D Preview walk-around & 360° camera look when not inside WebXR headset
+  useEffect(() => {
+    if (inXR) return
+    desktopPosRef.current.set(0, 1.5, 1.35)
+    desktopYawRef.current = 0
+    desktopPitchRef.current = -0.1
+    desktopEulerRef.current.set(-0.1, 0, 0, 'YXZ')
+    camera.position.copy(desktopPosRef.current)
+    camera.quaternion.setFromEuler(desktopEulerRef.current)
+
+    const canvas = gl.domElement
+    const onKeyDown = (e: KeyboardEvent) => {
+      desktopKeysRef.current.add(e.code)
+      if (e.code === 'KeyR') {
+        const st = useMyRoomStore.getState()
+        st.setAiAutoRotate(!st.aiAutoRotate)
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent) => desktopKeysRef.current.delete(e.code)
+    const onBlur = () => {
+      desktopKeysRef.current.clear()
+      desktopDragRef.current = null
+      myRoomRuntime.ai.desktopRotateDrag = false
+    }
+    const onMouseDown = (e: MouseEvent) => {
+      if (myRoomRuntime.ai.desktopRotateDrag || e.button === 2 || (e.button === 0 && e.shiftKey)) {
+        desktopDragRef.current = 'model'
+      } else if (e.button === 0) {
+        desktopDragRef.current = 'look'
+      }
+    }
+    const onMouseUp = () => {
+      desktopDragRef.current = null
+      myRoomRuntime.ai.desktopRotateDrag = false
+    }
+    const onMouseMove = (e: MouseEvent) => {
+      if (myRoomRuntime.ai.desktopRotateDrag || desktopDragRef.current === 'model') {
+        useMyRoomStore.getState().rotateAiModelBy(e.movementX * 0.0085)
+        return
+      }
+      if (desktopDragRef.current === 'look') {
+        desktopYawRef.current -= e.movementX * 0.0032
+        desktopPitchRef.current = Math.max(
+          -1.35,
+          Math.min(1.25, desktopPitchRef.current - e.movementY * 0.0032)
+        )
+      }
+    }
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault()
+    }
+    const onWheel = (e: WheelEvent) => {
+      desktopFwdRef.current
+        .set(-Math.sin(desktopYawRef.current), 0, -Math.cos(desktopYawRef.current))
+        .normalize()
+      desktopPosRef.current.addScaledVector(desktopFwdRef.current, -e.deltaY * 0.0018)
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
+    canvas.addEventListener('mousedown', onMouseDown)
+    window.addEventListener('mouseup', onMouseUp)
+    window.addEventListener('mousemove', onMouseMove)
+    canvas.addEventListener('contextmenu', onContextMenu)
+    canvas.addEventListener('wheel', onWheel, { passive: true })
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onBlur)
+      canvas.removeEventListener('mousedown', onMouseDown)
+      window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('mousemove', onMouseMove)
+      canvas.removeEventListener('contextmenu', onContextMenu)
+      canvas.removeEventListener('wheel', onWheel)
+    }
+  }, [inXR, camera, gl])
 
   useXRInputSourceEvent(
     'all',
@@ -147,6 +237,55 @@ export function MyRoomARRig() {
     const nowSec = performance.now() / 1000
     const lp = runtimeState.localPose
     const refSpace = referenceSpace ?? state.gl.xr.getReferenceSpace() ?? undefined
+
+    // Desktop 3D Preview walk-around & camera look when not inside WebXR
+    if (!state.gl.xr.isPresenting && !useGameStore.getState().inXR) {
+      const keys = desktopKeysRef.current
+      const fwd = desktopFwdRef.current
+        .set(-Math.sin(desktopYawRef.current), 0, -Math.cos(desktopYawRef.current))
+        .normalize()
+      const right = desktopRightRef.current
+        .set(Math.cos(desktopYawRef.current), 0, -Math.sin(desktopYawRef.current))
+        .normalize()
+      const moveSpeed = (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 3.8 : 2.3) * cDt
+      if (keys.has('KeyW') || keys.has('ArrowUp')) desktopPosRef.current.addScaledVector(fwd, moveSpeed)
+      if (keys.has('KeyS') || keys.has('ArrowDown')) desktopPosRef.current.addScaledVector(fwd, -moveSpeed)
+      if (keys.has('KeyA') || keys.has('ArrowLeft')) desktopPosRef.current.addScaledVector(right, -moveSpeed)
+      if (keys.has('KeyD') || keys.has('ArrowRight')) desktopPosRef.current.addScaledVector(right, moveSpeed)
+      if (keys.has('KeyE') || keys.has('Space')) desktopPosRef.current.y += 1.4 * cDt
+      if (keys.has('KeyQ') || keys.has('KeyC')) desktopPosRef.current.y -= 1.4 * cDt
+      if (keys.has('KeyJ') || keys.has('BracketLeft')) {
+        useMyRoomStore.getState().rotateAiModelBy(-1.85 * cDt)
+      }
+      if (keys.has('KeyL') || keys.has('BracketRight')) {
+        useMyRoomStore.getState().rotateAiModelBy(1.85 * cDt)
+      }
+
+      const b = myRoomRuntime.roomBoundsXZ
+      desktopPosRef.current.x = Math.max(b.minX + 0.25, Math.min(b.maxX - 0.25, desktopPosRef.current.x))
+      desktopPosRef.current.z = Math.max(b.minZ + 0.25, Math.min(b.maxZ - 0.25, desktopPosRef.current.z))
+      desktopPosRef.current.y = Math.max(
+        myRoomRuntime.floorY + 0.45,
+        Math.min(myRoomRuntime.floorY + 2.15, desktopPosRef.current.y)
+      )
+
+      desktopEulerRef.current.set(desktopPitchRef.current, desktopYawRef.current, 0, 'YXZ')
+      camera.position.copy(desktopPosRef.current)
+      camera.quaternion.setFromEuler(desktopEulerRef.current)
+
+      // Keep virtual local hands cleanly tucked near user waist on desktop so AI proximity checks stay realistic
+      const handY = Math.max(myRoomRuntime.floorY + 0.35, desktopPosRef.current.y - 0.42)
+      lp.leftPos = [
+        desktopPosRef.current.x - right.x * 0.22 + fwd.x * 0.28,
+        handY,
+        desktopPosRef.current.z - right.z * 0.22 + fwd.z * 0.28,
+      ]
+      lp.rightPos = [
+        desktopPosRef.current.x + right.x * 0.22 + fwd.x * 0.28,
+        handY,
+        desktopPosRef.current.z + right.z * 0.22 + fwd.z * 0.28,
+      ]
+    }
 
     camera.getWorldPosition(_worldPos)
     camera.getWorldQuaternion(_worldQuat)

@@ -49,10 +49,10 @@ export function getUnityRigSpec(gender: AvatarGender): UnityHumanoidRigSpec {
   const isFemale = gender === 'female'
   return {
     gender,
-    shoulderX: isFemale ? 0.156 : 0.2,
-    hipX: isFemale ? 0.078 : 0.096,
+    shoulderX: isFemale ? 0.148 : 0.2,
+    hipX: isFemale ? 0.086 : 0.096,
     hipsY: isFemale ? 0.87 : 0.88,
-    shoulderY: isFemale ? 1.335 : 1.36,
+    shoulderY: isFemale ? 1.32 : 1.36,
     upperArmLen: isFemale ? 0.255 : 0.28,
     forearmLen: isFemale ? 0.235 : 0.25,
     thighLen: isFemale ? 0.415 : 0.41,
@@ -291,12 +291,106 @@ class SkinnedMeshAccumulator {
     }
   }
 
-  buildGeometry(): THREE.BufferGeometry {
+  addSurfaceGrid(
+    rows: number,
+    cols: number,
+    matSlot: UnityMatSlot,
+    evalFn: (u: number, v: number) => {
+      pos: [number, number, number]
+      weights: Array<[number, number]>
+    }
+  ): void {
+    const startVert = this.positions.length / 3
+    const rowLen = cols + 1
+    for (let r = 0; r <= rows; r++) {
+      const v = r / rows
+      for (let c = 0; c <= cols; c++) {
+        const u = c / cols
+        const pt = evalFn(u, v)
+        const [bi, bw] = this.normalizeWeights(pt.weights)
+        this.positions.push(pt.pos[0], pt.pos[1], pt.pos[2])
+        this.uvs.push(u, v)
+        this.skinIndices.push(bi[0], bi[1], bi[2], bi[3])
+        this.skinWeights.push(bw[0], bw[1], bw[2], bw[3])
+      }
+    }
+    const triList = this.indicesByMat[matSlot]
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const a = startVert + r * rowLen + c
+        const b = a + 1
+        const cIdx = startVert + (r + 1) * rowLen + c
+        const d = cIdx + 1
+        triList.push(a, cIdx, b, b, cIdx, d)
+      }
+    }
+  }
+
+  buildGeometry(tintFemaleSkin = false): THREE.BufferGeometry {
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3))
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(this.uvs, 2))
     geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(this.skinIndices, 4))
     geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute(this.skinWeights, 4))
+
+    const vertCount = this.positions.length / 3
+    const colors = new Float32Array(this.positions.length)
+    colors.fill(1)
+    if (tintFemaleSkin && vertCount > 0) {
+      const seen = new Uint8Array(vertCount)
+      const skinIndices = this.indicesByMat[0]
+      for (let i = 0; i < skinIndices.length; i++) {
+        const vi = skinIndices[i]
+        if (seen[vi]) continue
+        seen[vi] = 1
+        const x = this.positions[vi * 3]
+        const y = this.positions[vi * 3 + 1]
+        const z = this.positions[vi * 3 + 2]
+        // Keep neck seam identical to sculpted head so transition is invisible
+        if (y >= 1.37) continue
+
+        let r = 1
+        let g = 1
+        let b = 1
+        if (z < 0) {
+          // Subtle warm subsurface sternum cleavage & underbust contour
+          const sternal =
+            Math.exp(-Math.pow(x / 0.028, 2)) * Math.exp(-Math.pow((y - 1.2) / 0.055, 2))
+          const underBust =
+            Math.exp(-Math.pow((y - 1.145) / 0.028, 2)) *
+            (0.4 + 0.6 * Math.exp(-Math.pow((Math.abs(x) - 0.068) / 0.055, 2)))
+          r -= sternal * 0.032 + underBust * 0.028
+          g -= sternal * 0.072 + underBust * 0.062
+          b -= sternal * 0.082 + underBust * 0.072
+
+          // Soft collarbone & upper chest rose blush
+          const collarFlush =
+            Math.exp(-Math.pow((y - 1.325) / 0.025, 2)) * Math.exp(-Math.pow(x / 0.11, 2))
+          r += collarFlush * 0.014
+          g -= collarFlush * 0.022
+          b -= collarFlush * 0.026
+
+          // Delicate midriff / navel dimple warmth
+          if (z < -0.055) {
+            const navelGlow =
+              Math.exp(-Math.pow(x / 0.02, 2)) * Math.exp(-Math.pow((y - 0.985) / 0.022, 2))
+            r -= navelGlow * 0.022
+            g -= navelGlow * 0.052
+            b -= navelGlow * 0.062
+          }
+
+          // Subtle healthy rose blush at patella knees
+          const kneeBlush = Math.exp(-Math.pow((y - 0.432) / 0.028, 2))
+          r += kneeBlush * 0.012
+          g -= kneeBlush * 0.026
+          b -= kneeBlush * 0.03
+        }
+        colors[vi * 3] = Math.max(0.9, Math.min(1.03, r))
+        colors[vi * 3 + 1] = Math.max(0.86, Math.min(1.02, g))
+        colors[vi * 3 + 2] = Math.max(0.85, Math.min(1.02, b))
+      }
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
 
     const mergedIndices: number[] = []
     let cursor = 0
@@ -323,120 +417,164 @@ class SkinnedMeshAccumulator {
 export function buildUnityBodyGeometry(
   spec: UnityHumanoidRigSpec,
   hideNeckForFirstPerson = false,
-  uniformStyle: 'casual' | 'sport' | 'cricket' = 'casual'
+  uniformStyle: 'casual' | 'nerdy' | 'sport' | 'cricket' = 'casual'
 ): THREE.BufferGeometry {
   const isF = spec.gender === 'female'
-  const isAnimeUniform = isF && uniformStyle === 'casual'
+  const isChicF = isF && uniformStyle === 'casual'
+  const isNerdyF = isF && uniformStyle === 'nerdy'
+  const hasSkirt = isChicF || isNerdyF
   const acc = new SkinnedMeshAccumulator()
   const B = UNITY_BONES
 
-  const torsoContour = (spinePinch: number, bustDepth: number) => (theta: number) => {
+  const torsoContour = (spinePinch: number, bustStrength: number) => (theta: number) => {
     const cosT = Math.cos(theta)
     const sinT = Math.sin(theta)
     const backGroove = cosT > 0.7 ? -Math.pow((cosT - 0.7) / 0.3, 2) * spinePinch : 0
+    if (isF && bustStrength > 0) {
+      // Sculpt natural bilateral female breast mounds draped smoothly under fabric
+      const frontAng = Math.atan2(sinT, -cosT) // 0 straight ahead (-Z)
+      const leftLobe = Math.exp(-Math.pow((frontAng + 0.45) / 0.36, 2))
+      const rightLobe = Math.exp(-Math.pow((frontAng - 0.45) / 0.36, 2))
+      const cup = (leftLobe + rightLobe) * bustStrength
+      const spreadX = (rightLobe - leftLobe) * bustStrength * 0.22
+      return [spreadX, 0, backGroove - cup] as [number, number, number]
+    }
     const frontSplit =
       cosT < -0.35
-        ? Math.sin(Math.abs(sinT) * Math.PI) * bustDepth * Math.abs(cosT + 0.35)
+        ? Math.sin(Math.abs(sinT) * Math.PI) * bustStrength * Math.abs(cosT + 0.35)
         : 0
     return [0, 0, backGroove - frontSplit] as [number, number, number]
   }
 
-  // 1. CONTINUOUS PELVIS -> SWEATER VEST -> SHIRT NECKLINE -> NECK LOFT
+  // 1. CONTINUOUS 36-24-36 PELVIS -> WAIST -> MEDIUM BUST -> SHOULDERS -> NECK LOFT
   const torsoRings: LoftRing[] = [
-    // Pelvis undershort / trouser seat base
+    // Pelvis seat base (dark under-skirt fitted liner for female skirt looks, trousers for sport/male)
     {
       center: [0, 0.77, 0.006],
-      rx: isF ? 0.122 : 0.132,
-      rz: 0.084,
+      rx: isF ? 0.132 : 0.132,
+      rz: isF ? 0.096 : 0.084,
       weights: [[B.Hips, 1]],
-      matSlot: 2,
+      matSlot: hasSkirt ? 4 : 2,
     },
-    // Hips volume (hidden neatly under pleated skirt for casual female)
+    // 36" Contoured Hips & Full Feminine Curve
     {
       center: [0, 0.86, 0.008],
-      rx: isF ? 0.136 : 0.16,
-      rz: isF ? 0.102 : 0.114,
-      frontScale: 0.94,
-      backScale: isF ? 1.12 : 1.08,
+      rx: isF ? 0.161 : 0.16,
+      rz: isF ? 0.118 : 0.114,
+      frontScale: 0.96,
+      backScale: isF ? 1.24 : 1.08,
       weights: [[B.Hips, 0.9], [B.Spine, 0.1]],
-      matSlot: 2,
+      matSlot: hasSkirt ? 4 : 2,
+      shapeFn: torsoContour(0.01, 0),
+    },
+    // Lower hip / iliac curve
+    {
+      center: [0, 0.93, 0.005],
+      rx: isF ? 0.14 : 0.152,
+      rz: isF ? 0.102 : 0.108,
+      weights: [[B.Hips, 0.6], [B.Spine, 0.4]],
+      matSlot: isChicF ? 4 : 1,
+    },
+    // Tailored faux-leather waist belt cinching high-waisted skirt (chic) or vest waist (nerdy)
+    {
+      center: [0, 0.972, 0.004],
+      rx: isChicF ? 0.132 : isF ? 0.123 : 0.148,
+      rz: isChicF ? 0.098 : isF ? 0.09 : 0.104,
+      frontScale: isChicF ? 1.02 : 1.0,
+      backScale: isChicF ? 1.05 : 1.0,
+      weights: [[B.Hips, 0.28], [B.Spine, 0.72]],
+      matSlot: isChicF ? 4 : 1,
       shapeFn: torsoContour(0.008, 0),
     },
-    // Knit sweater ribbed hem overlapping top of skirt waistband
-    {
-      center: [0, 0.93, 0.004],
-      rx: isF ? 0.134 : 0.152,
-      rz: isF ? 0.098 : 0.108,
-      weights: [[B.Hips, 0.6], [B.Spine, 0.4]],
-      matSlot: 1,
-    },
-    // Lower vest rib-band transition
-    {
-      center: [0, 0.965, 0.003],
-      rx: isF ? 0.126 : 0.148,
-      rz: isF ? 0.092 : 0.104,
-      weights: [[B.Hips, 0.25], [B.Spine, 0.75]],
-      matSlot: 1,
-      shapeFn: torsoContour(0.006, 0),
-    },
-    // Petite slender anime waist
+    // Slim stylish midriff peek just above waist belt (female chic casual only; nerdy wears tucked blouse/vest)
+    ...(isChicF
+      ? [
+          {
+            center: [0, 0.996, 0.002] as [number, number, number],
+            rx: 0.117,
+            rz: 0.086,
+            weights: [[B.Spine, 0.75], [B.Hips, 0.25]] as Array<[number, number]>,
+            matSlot: 0 as UnityMatSlot,
+          },
+        ]
+      : []),
+    // 24" Slender Hourglass Waist / Ribbed Cropped Knit Sweater Waistband or Vest Base
     {
       center: [0, 1.045, 0.001],
-      rx: isF ? 0.108 : 0.146,
-      rz: isF ? 0.079 : 0.104,
-      frontScale: 1.03,
+      rx: isF ? 0.112 : 0.146,
+      rz: isF ? 0.083 : 0.104,
+      frontScale: 1.04,
       backScale: 0.96,
       weights: [[B.Spine, 0.74], [B.Chest, 0.2], [B.Hips, 0.06]],
       matSlot: 1,
-      shapeFn: torsoContour(0.009, 0.003),
+      shapeFn: torsoContour(0.01, 0),
     },
-    // Under-bust / Ribcage
+    // Under-bust ribcage
     {
       center: [0, 1.135, -0.001],
-      rx: isF ? 0.126 : 0.166,
-      rz: isF ? 0.092 : 0.118,
-      frontScale: 1.09,
+      rx: isF ? 0.128 : 0.166,
+      rz: isF ? 0.094 : 0.118,
+      frontScale: 1.08,
       backScale: 0.94,
       weights: [[B.Spine, 0.24], [B.Chest, 0.76]],
       matSlot: 1,
       shapeFn: torsoContour(0.01, isF ? 0.014 : 0.009),
     },
-    // Bust / Upper chest peak (smooth stylized sweater drape)
+    // 36" Bust with Balanced Medium Bilateral Breasts draped smoothly under knit fabric
     {
-      center: [0, 1.225, -0.005],
-      rx: isF ? 0.144 : 0.184,
-      rz: isF ? 0.112 : 0.128,
-      frontScale: isF ? 1.24 : 1.12,
-      backScale: 0.92,
+      center: [0, 1.21, -0.004],
+      rx: isF ? 0.146 : 0.184,
+      rz: isF ? 0.114 : 0.128,
+      frontScale: isF ? 1.14 : 1.12,
+      backScale: 0.94,
       weights: [[B.Chest, 0.94], [B.Spine, 0.06]],
       matSlot: 1,
-      shapeFn: torsoContour(0.011, isF ? 0.018 : 0.012),
+      shapeFn: torsoContour(0.011, isF ? 0.032 : 0.012),
     },
-    // Upper chest / Clavicle vest yoke
+    // Upper chest slope above bust
     {
-      center: [0, 1.32, -0.002],
-      rx: isF ? 0.15 : 0.198,
-      rz: isF ? 0.092 : 0.104,
-      frontScale: 1.06,
-      backScale: 0.96,
+      center: [0, 1.28, -0.002],
+      rx: isF ? 0.144 : 0.192,
+      rz: isF ? 0.096 : 0.112,
+      frontScale: 1.08,
+      backScale: 0.95,
+      weights: [[B.Chest, 0.98], [B.Spine, 0.02]],
+      matSlot: 1,
+      shapeFn: torsoContour(0.01, isF ? 0.011 : 0.007),
+    },
+    // Smooth sloping trapezius & clavicle collarbone shoulder yoke
+    {
+      center: [0, 1.325, 0],
+      rx: isF ? 0.132 : 0.19,
+      rz: isF ? 0.082 : 0.1,
+      frontScale: 1.04,
+      backScale: 0.97,
       weights: [[B.Chest, 1]],
       matSlot: 1,
-      shapeFn: torsoContour(0.008, 0.004),
+      shapeFn: torsoContour(0.008, 0.002),
     },
-    // White collared shirt top neckline under sweater vest
+    // Sloping trapezius -> collar transition (knitted mock-neck on chic; crisp shirt on nerdy/male casual)
     {
-      center: [0, 1.372, 0.004],
-      rx: isF ? 0.088 : 0.116,
-      rz: isF ? 0.066 : 0.076,
-      weights: [[B.Chest, 0.78], [B.Neck, 0.22]],
-      matSlot: uniformStyle === 'casual' ? 5 : 4,
+      center: [0, 1.356, 0.003],
+      rx: isF ? 0.094 : 0.145,
+      rz: isF ? 0.066 : 0.086,
+      weights: [[B.Chest, 0.86], [B.Neck, 0.14]],
+      matSlot: isChicF ? 1 : uniformStyle === 'casual' || uniformStyle === 'nerdy' ? 5 : 4,
+    },
+    // Clavicle collar cuff
+    {
+      center: [0, isChicF ? 1.388 : 1.38, 0.004],
+      rx: isChicF ? 0.05 : isF ? 0.058 : 0.092,
+      rz: isChicF ? 0.048 : isF ? 0.052 : 0.068,
+      weights: [[B.Chest, 0.55], [B.Neck, 0.45]],
+      matSlot: isChicF ? 1 : uniformStyle === 'casual' || uniformStyle === 'nerdy' ? 5 : 4,
     },
   ]
 
   if (!hideNeckForFirstPerson) {
     torsoRings.push(
       {
-        center: [0, 1.398, 0.005],
+        center: [0, 1.404, 0.005],
         rx: isF ? 0.041 : 0.056,
         rz: isF ? 0.041 : 0.056,
         weights: [[B.Chest, 0.3], [B.Neck, 0.7]],
@@ -444,7 +582,7 @@ export function buildUnityBodyGeometry(
       },
       {
         center: [0, 1.45, 0.003],
-        rx: isF ? 0.038 : 0.052,
+        rx: isF ? 0.039 : 0.052,
         rz: isF ? 0.039 : 0.052,
         weights: [[B.Neck, 0.75], [B.Head, 0.25]],
         matSlot: 0,
@@ -459,10 +597,10 @@ export function buildUnityBodyGeometry(
     )
   }
 
-  acc.addLoftedTube(torsoRings, 28, true, true)
+  acc.addLoftedTube(torsoRings, 36, true, true)
 
-  // 1B. 3D RADIAL ACCORDION-PLEATED MINI SKIRT FOR CASUAL FEMALE (18 Knife Pleats!)
-  if (isAnimeUniform) {
+  // 1B. 3D RADIAL ACCORDION-PLEATED A-LINE MINI SKIRT (Chic Burgundy or Preppy Nerdy Plaid)
+  if (hasSkirt) {
     const pleatCount = 18
     const radialSegs = pleatCount * 4 // 72 segments for crisp outer ridges & inner valleys
     const skirtWeightAt = (legFactor: number) => (theta: number): Array<[number, number]> => {
@@ -487,46 +625,46 @@ export function buildUnityBodyGeometry(
     }
 
     const skirtRings: LoftRing[] = [
-      // Waistband tucked neatly under sweater rib-band
+      // Waistband tucked neatly inside leather waist belt (chic) or vest rim (nerdy)
       {
-        center: [0, 0.94, 0.004],
-        rx: 0.132,
-        rz: 0.096,
+        center: [0, isChicF ? 0.958 : 0.94, 0.004],
+        rx: isChicF ? 0.128 : 0.144,
+        rz: isChicF ? 0.094 : 0.106,
         weights: [[B.Hips, 0.88], [B.Spine, 0.12]],
         matSlot: 2,
         shapeFn: pleatShape(0.002),
       },
-      // Upper hip pleat flare
+      // Upper hip pleat flare clearing 36" curvy hips smoothly
       {
         center: [0, 0.885, 0.006],
-        rx: 0.148,
-        rz: 0.112,
+        rx: 0.172,
+        rz: 0.132,
         frontScale: 0.96,
-        backScale: 1.1,
+        backScale: 1.18,
         weights: [[B.Hips, 1]],
         perVertexWeights: skirtWeightAt(0.14),
         matSlot: 2,
-        shapeFn: pleatShape(0.007),
+        shapeFn: pleatShape(0.008),
       },
       // Mid skirt pleated flare
       {
         center: [0, 0.79, 0.005],
-        rx: 0.178,
-        rz: 0.138,
+        rx: 0.194,
+        rz: 0.148,
         frontScale: 0.96,
-        backScale: 1.08,
+        backScale: 1.12,
         weights: [[B.Hips, 1]],
         perVertexWeights: skirtWeightAt(0.28),
         matSlot: 2,
-        shapeFn: pleatShape(0.012),
+        shapeFn: pleatShape(0.013),
       },
       // Crisp mini-skirt outer hem above mid-thigh
       {
         center: [0, 0.695, 0.004],
-        rx: 0.204,
-        rz: 0.158,
+        rx: 0.218,
+        rz: 0.168,
         frontScale: 0.96,
-        backScale: 1.06,
+        backScale: 1.08,
         weights: [[B.Hips, 1]],
         perVertexWeights: skirtWeightAt(0.42),
         matSlot: 2,
@@ -535,10 +673,10 @@ export function buildUnityBodyGeometry(
       // Inner bottom thickness hem (closes underside cleanly for bottom-up 360° camera view!)
       {
         center: [0, 0.696, 0.004],
-        rx: 0.186,
-        rz: 0.142,
+        rx: 0.196,
+        rz: 0.15,
         frontScale: 0.96,
-        backScale: 1.06,
+        backScale: 1.08,
         weights: [[B.Hips, 1]],
         perVertexWeights: skirtWeightAt(0.42),
         matSlot: 2,
@@ -558,7 +696,7 @@ export function buildUnityBodyGeometry(
     acc.addLoftedTube(skirtRings, radialSegs, false, false)
   }
 
-  // 2. CONTINUOUS STITCHED LEFT & RIGHT ARMS (White Puffed Short Sleeve -> Slender Bare Forearm -> Wrist)
+  // 2. CONTINUOUS STITCHED LEFT & RIGHT ARMS (Chic Fitted 3/4 Knit Sleeves, Preppy Blouse, or Athletic Sleeves)
   const buildSkinnedArm = (sideSign: -1 | 1) => {
     const shBone = sideSign < 0 ? B.LeftShoulder : B.RightShoulder
     const uaBone = sideSign < 0 ? B.LeftUpperArm : B.RightUpperArm
@@ -570,66 +708,125 @@ export function buildUnityBodyGeometry(
     const elbowY = sy - spec.upperArmLen
     const wristY = elbowY - spec.forearmLen
 
-    const armScale = isF ? 0.78 : 0.98
-    const sleeveSlot: UnityMatSlot = uniformStyle === 'casual' ? 5 : 1
+    const armScale = isF ? 0.84 : 0.98
+    const sleeveSlot: UnityMatSlot =
+      isChicF ? 1 : uniformStyle === 'casual' || uniformStyle === 'nerdy' ? 5 : 1
 
-    const armRings: LoftRing[] = [
-      // Shoulder socket tucked cleanly into vest armhole
-      {
-        center: [sx - sideSign * 0.042, sy - 0.008, 0],
-        rx: 0.046 * armScale,
-        rz: 0.046 * armScale,
-        weights: [[B.Chest, 0.78], [shBone, 0.22]],
-        matSlot: sleeveSlot,
-      },
-      // Puffed crisp white shirt sleeve shoulder cap
-      {
-        center: [sx, sy + 0.004, 0],
-        rx: 0.056 * armScale,
-        rz: 0.055 * armScale,
-        weights: [[shBone, 0.35], [uaBone, 0.65]],
-        matSlot: sleeveSlot,
-      },
-      // Short-sleeve slight outward bell puff
-      {
-        center: [sx, sy - 0.068, 0],
-        rx: 0.058 * armScale,
-        rz: 0.056 * armScale,
-        weights: [[uaBone, 1]],
-        matSlot: sleeveSlot,
-      },
-      // Short-sleeve cuff outer edge
-      {
-        center: [sx, sy - 0.118, -0.001],
-        rx: 0.054 * armScale,
-        rz: 0.053 * armScale,
-        weights: [[uaBone, 1]],
-        matSlot: sleeveSlot,
-      },
-      // Sleeve cuff inward tuck into arm (real 3D hollow sleeve opening!)
-      {
-        center: [sx, sy - 0.116, -0.001],
-        rx: 0.036 * armScale,
-        rz: 0.036 * armScale,
-        weights: [[uaBone, 1]],
-        matSlot: sleeveSlot,
-      },
-      // Bare slender upper arm emerging cleanly out of white shirt sleeve
-      {
-        center: [sx, sy - 0.12, 0],
-        rx: 0.034 * armScale,
-        rz: 0.034 * armScale,
-        weights: [[uaBone, 0.95], [laBone, 0.05]],
-        matSlot: 0,
-      },
-      // Distal upper arm above elbow
-      {
-        center: [sx, sy - 0.2, 0],
-        rx: 0.032 * armScale,
-        rz: 0.032 * armScale,
-        weights: [[uaBone, 0.78], [laBone, 0.22]],
-        matSlot: 0,
-      },
+    const armRings: LoftRing[] = isChicF
+      ? [
+          // Fitted tailored knit sleeve seamlessly blending into mock-neck sweater shoulder yoke
+          {
+            center: [sx - sideSign * 0.044, sy - 0.004, 0],
+            rx: 0.042 * armScale,
+            rz: 0.042 * armScale,
+            weights: [[B.Chest, 0.78], [shBone, 0.22]],
+            matSlot: sleeveSlot,
+          },
+          {
+            center: [sx, sy + 0.004, 0],
+            rx: 0.048 * armScale,
+            rz: 0.047 * armScale,
+            weights: [[shBone, 0.38], [uaBone, 0.62]],
+            matSlot: sleeveSlot,
+          },
+          {
+            center: [sx, sy - 0.09, 0],
+            rx: 0.041 * armScale,
+            rz: 0.041 * armScale,
+            weights: [[uaBone, 1]],
+            matSlot: sleeveSlot,
+          },
+          // Ribbed knit three-quarter sleeve cuff
+          {
+            center: [sx, sy - 0.165, -0.001],
+            rx: 0.044 * armScale,
+            rz: 0.043 * armScale,
+            weights: [[uaBone, 0.88], [laBone, 0.12]],
+            matSlot: sleeveSlot,
+          },
+          {
+            center: [sx, sy - 0.163, -0.001],
+            rx: 0.032 * armScale,
+            rz: 0.032 * armScale,
+            weights: [[uaBone, 0.85], [laBone, 0.15]],
+            matSlot: sleeveSlot,
+          },
+          // Slender bare lower upper-arm emerging cleanly below knit sleeve cuff
+          {
+            center: [sx, sy - 0.168, 0],
+            rx: 0.032 * armScale,
+            rz: 0.032 * armScale,
+            weights: [[uaBone, 0.84], [laBone, 0.16]],
+            matSlot: 0,
+          },
+          {
+            center: [sx, sy - 0.21, 0],
+            rx: 0.031 * armScale,
+            rz: 0.031 * armScale,
+            weights: [[uaBone, 0.72], [laBone, 0.28]],
+            matSlot: 0,
+          },
+        ]
+      : [
+          // Shoulder socket tucked cleanly into vest armhole
+          {
+            center: [sx - sideSign * 0.042, sy - 0.008, 0],
+            rx: 0.046 * armScale,
+            rz: 0.046 * armScale,
+            weights: [[B.Chest, 0.78], [shBone, 0.22]],
+            matSlot: sleeveSlot,
+          },
+          // Crisp short sleeve shoulder cap
+          {
+            center: [sx, sy + 0.004, 0],
+            rx: 0.056 * armScale,
+            rz: 0.055 * armScale,
+            weights: [[shBone, 0.35], [uaBone, 0.65]],
+            matSlot: sleeveSlot,
+          },
+          // Short-sleeve slight outward bell puff
+          {
+            center: [sx, sy - 0.068, 0],
+            rx: 0.058 * armScale,
+            rz: 0.056 * armScale,
+            weights: [[uaBone, 1]],
+            matSlot: sleeveSlot,
+          },
+          // Short-sleeve cuff outer edge
+          {
+            center: [sx, sy - 0.118, -0.001],
+            rx: 0.054 * armScale,
+            rz: 0.053 * armScale,
+            weights: [[uaBone, 1]],
+            matSlot: sleeveSlot,
+          },
+          // Sleeve cuff inward tuck into arm (real 3D hollow sleeve opening!)
+          {
+            center: [sx, sy - 0.116, -0.001],
+            rx: 0.036 * armScale,
+            rz: 0.036 * armScale,
+            weights: [[uaBone, 1]],
+            matSlot: sleeveSlot,
+          },
+          // Bare slender upper arm emerging cleanly out of short sleeve
+          {
+            center: [sx, sy - 0.12, 0],
+            rx: 0.034 * armScale,
+            rz: 0.034 * armScale,
+            weights: [[uaBone, 0.95], [laBone, 0.05]],
+            matSlot: 0,
+          },
+          // Distal upper arm above elbow
+          {
+            center: [sx, sy - 0.2, 0],
+            rx: 0.032 * armScale,
+            rz: 0.032 * armScale,
+            weights: [[uaBone, 0.78], [laBone, 0.22]],
+            matSlot: 0,
+          },
+        ]
+
+    armRings.push(
       // Smooth 50/50 Elbow crease
       {
         center: [sx, elbowY, 0.003],
@@ -663,13 +860,13 @@ export function buildUnityBodyGeometry(
         matSlot: 0,
       },
       {
-        center: [sx, wristY, 0],
-        rx: 0.021 * armScale,
-        rz: 0.018 * armScale,
-        weights: [[hdBone, 0.92], [laBone, 0.08]],
+        center: [sx, wristY - 0.015, 0],
+        rx: 0.02 * armScale,
+        rz: 0.017 * armScale,
+        weights: [[hdBone, 1]],
         matSlot: 0,
-      },
-    ]
+      }
+    )
 
     acc.addLoftedTube(armRings, 18, true, true)
   }
@@ -677,7 +874,7 @@ export function buildUnityBodyGeometry(
   buildSkinnedArm(-1)
   buildSkinnedArm(1)
 
-  // 3. CONTINUOUS STITCHED LEGS, BARE THIGHS, KNEE-HIGH SOCKS & PENNY LOAFERS
+  // 3. CONTINUOUS STITCHED LEGS, BARE THIGHS, KNEE-HIGH SOCKS & BOOTS / LOAFERS
   const buildSkinnedLeg = (sideSign: -1 | 1) => {
     const ulBone = sideSign < 0 ? B.LeftUpperLeg : B.RightUpperLeg
     const llBone = sideSign < 0 ? B.LeftLowerLeg : B.RightLowerLeg
@@ -687,144 +884,143 @@ export function buildUnityBodyGeometry(
     const hipY = spec.hipsY - 0.03 // 0.84 female / 0.85 male
     const kneeY = hipY - spec.thighLen // 0.425 female / 0.44 male
     const ankleY = kneeY - spec.shinLen // 0.03 female / 0.05 male
-    const legScale = isF ? 0.84 : 1.0
-
-    const thighSlot: UnityMatSlot = isAnimeUniform ? 0 : 2
-    const shinSlot: UnityMatSlot = isAnimeUniform ? 6 : 2
-
+    const legScale = isF ? 0.87 : 1.0
+    const thighSlot: UnityMatSlot = hasSkirt ? 0 : 2
+    const upperShinSlot: UnityMatSlot = hasSkirt ? 6 : 2
+    const lowerCalfSlot: UnityMatSlot = isChicF ? 3 : hasSkirt ? 6 : 2
     const legRings: LoftRing[] = [
-      // Upper hip undershort bridging smoothly inside pelvis / skirt
+      // Hip trochanter socket blending into contoured pelvis
       {
-        center: [hx * 0.9, hipY + 0.025, 0.004],
-        rx: 0.074 * legScale,
-        rz: 0.076 * legScale,
+        center: [hx * 0.95, hipY + 0.025, 0.004],
+        rx: 0.078 * legScale,
+        rz: 0.08 * legScale,
         weights: [[B.Hips, 0.48], [ulBone, 0.52]],
-        matSlot: 2,
+        matSlot: hasSkirt ? 4 : 2,
       },
-      // Upper thigh
+      // Full outer thigh sweep
       {
-        center: [hx, hipY - 0.055, -0.002],
-        rx: 0.07 * legScale,
-        rz: 0.072 * legScale,
+        center: [hx + sideSign * 0.007, hipY - 0.06, -0.002],
+        rx: 0.077 * legScale,
+        rz: 0.079 * legScale,
         weights: [[B.Hips, 0.14], [ulBone, 0.86]],
         matSlot: thighSlot,
       },
-      // Mid bare thigh slender taper
+      // Athletic mid-quadricep thigh curve tapering gently inward toward knee
       {
-        center: [hx, hipY - 0.21, -0.004],
-        rx: 0.059 * legScale,
-        rz: 0.061 * legScale,
+        center: [hx + sideSign * 0.001, hipY - 0.21, -0.005],
+        rx: 0.063 * legScale,
+        rz: 0.065 * legScale,
+        frontScale: 1.05,
         weights: [[ulBone, 1]],
         matSlot: thighSlot,
       },
       // Lower thigh above knee
       {
-        center: [hx, kneeY + 0.055, -0.002],
-        rx: 0.05 * legScale,
-        rz: 0.052 * legScale,
+        center: [hx - sideSign * 0.005, kneeY + 0.055, -0.002],
+        rx: 0.051 * legScale,
+        rz: 0.053 * legScale,
         weights: [[ulBone, 0.85], [llBone, 0.15]],
         matSlot: thighSlot,
       },
-      // Knee joint blend ring (just above knee-high sock cuff!)
+      // Anatomical patella knee curve (bare above sock cuff for skirt looks)
       {
-        center: [hx, kneeY + 0.012, -0.004],
+        center: [hx - sideSign * 0.007, kneeY + 0.012, -0.004],
         rx: 0.047 * legScale,
         rz: 0.05 * legScale,
-        frontScale: 1.07,
-        backScale: 0.93,
+        frontScale: 1.09,
+        backScale: 0.92,
         weights: [[ulBone, 0.55], [llBone, 0.45]],
-        matSlot: shinSlot,
+        matSlot: hasSkirt ? 0 : upperShinSlot,
       },
-      // Sharp knee-high sock cuffed edge just below kneecap (+1.5mm subtle cuff lip)
+      // Below patella / sock top cuff rim
       {
-        center: [hx, kneeY + 0.009, -0.003],
+        center: [hx - sideSign * 0.006, kneeY + 0.005, -0.003],
         rx: 0.0485 * legScale,
         rz: 0.051 * legScale,
         weights: [[ulBone, 0.42], [llBone, 0.58]],
-        matSlot: shinSlot,
+        matSlot: upperShinSlot,
       },
-      // Below knee in sock
+      // Proximal calf
       {
-        center: [hx, kneeY - 0.05, 0.002],
+        center: [hx - sideSign * 0.003, kneeY - 0.05, 0.002],
         rx: 0.046 * legScale,
         rz: 0.049 * legScale,
         weights: [[ulBone, 0.14], [llBone, 0.86]],
-        matSlot: shinSlot,
+        matSlot: upperShinSlot,
       },
-      // Slender sculpted calf
+      // Mid-calf: Chic leather boot shaft cuff (Chic) or sock/trouser calf
       {
-        center: [hx, kneeY - 0.145, 0.007],
-        rx: 0.047 * legScale,
-        rz: 0.052 * legScale,
-        backScale: 1.14,
+        center: [hx + sideSign * 0.002, kneeY - 0.145, 0.008],
+        rx: (isChicF ? 0.053 : 0.049) * legScale,
+        rz: (isChicF ? 0.057 : 0.054) * legScale,
+        backScale: 1.22,
         weights: [[llBone, 1]],
-        matSlot: shinSlot,
+        matSlot: lowerCalfSlot,
       },
-      // Slim anime ankle
+      // Slender sculpted Achilles ankle
       {
-        center: [hx, ankleY + 0.075, 0.003],
-        rx: 0.036 * legScale,
-        rz: 0.038 * legScale,
+        center: [hx - sideSign * 0.004, ankleY + 0.075, 0.003],
+        rx: (isChicF ? 0.037 : 0.034) * legScale,
+        rz: (isChicF ? 0.039 : 0.036) * legScale,
         weights: [[llBone, 1]],
-        matSlot: shinSlot,
+        matSlot: lowerCalfSlot,
       },
-      // Sock entering loafer / sneaker cuff
+      // Ankle above heel
       {
         center: [hx, ankleY + 0.025, 0.002],
-        rx: 0.036 * legScale,
-        rz: 0.039 * legScale,
+        rx: (isChicF ? 0.038 : 0.035) * legScale,
+        rz: (isChicF ? 0.041 : 0.038) * legScale,
         weights: [[llBone, 0.72], [ftBone, 0.28]],
-        matSlot: isAnimeUniform ? 6 : 4,
+        matSlot: isChicF ? 3 : hasSkirt ? 6 : 4,
       },
-      // Dark brown penny loafer collar / shoe quarter
+      // Heel / boot or loafer counter
       {
-        center: [hx, ankleY + 0.015, -0.008],
-        rx: isF ? 0.038 : 0.044,
-        rz: isF ? 0.054 : 0.056,
+        center: [hx, ankleY + 0.012, -0.012],
+        rx: isF ? 0.037 : 0.044,
+        rz: isF ? 0.052 : 0.056,
         weights: [[ftBone, 0.86], [llBone, 0.14]],
         matSlot: 3,
       },
-      // Sleek loafer instep & almond toe extending forward along -Z
+      // Forefoot / sleek boot vamp / loafer vamp
       {
         center: [hx, 0.024, -0.044],
-        rx: isF ? 0.041 : 0.047,
+        rx: isF ? 0.039 : 0.047,
         rz: isF ? 0.094 : 0.105,
         frontScale: 1.1,
         backScale: 0.9,
         weights: [[ftBone, 1]],
         matSlot: 3,
       },
-      // Thin dark outsole resting flush on floor (y = 0.002)
+      // Flat foot plantar outsole
       {
-        center: [hx, 0.009, -0.046],
-        rx: isF ? 0.042 : 0.049,
+        center: [hx, 0.007, -0.046],
+        rx: isF ? 0.039 : 0.049,
         rz: isF ? 0.098 : 0.11,
-        frontScale: 1.08,
-        backScale: 0.92,
+        frontScale: 1.02,
+        backScale: 0.94,
         weights: [[ftBone, 1]],
         matSlot: 4,
       },
     ]
 
-    acc.addLoftedTube(legRings, 18, false, true)
+    acc.addLoftedTube(legRings, 20, false, true)
   }
 
   buildSkinnedLeg(-1)
   buildSkinnedLeg(1)
 
-  return acc.buildGeometry()
+  return acc.buildGeometry(isF)
 }
 
 /**
- * Generates a stylized anime/VRoid sculpted 3D Head mesh for female/casual
- * (smooth oval cranium, delicate V-chin, clean bright eye plane, cute tiny pointed nose)
- * or chiseled humanoid sculpture for male athletes — facing -Z!
+ * Generates a semi-realistic sculpted 3D Head mesh (refined orbital sockets, sculpted nasal bridge
+ * + delicate tip/nostrils, soft cheekbones, sculpted Cupid's bow & fuller lower lip, smooth jawline) facing -Z!
  */
 export function buildUnitySculptedHeadGeometry(gender: AvatarGender): THREE.BufferGeometry {
   const isF = gender === 'female'
   const uSegs = 56
   const vSegs = 40
-  const geo = new THREE.SphereGeometry(0.116, uSegs, vSegs)
+  const geo = new THREE.SphereGeometry(0.114, uSegs, vSegs)
   const pos = geo.getAttribute('position') as THREE.BufferAttribute
   const uv = geo.getAttribute('uv') as THREE.BufferAttribute
 
@@ -836,76 +1032,76 @@ export function buildUnitySculptedHeadGeometry(gender: AvatarGender): THREE.Buff
     let y = pos.getY(i)
     let z = pos.getZ(i)
 
-    // Anime/VRoid female cranium vs structured male cranium
-    x *= isF ? 0.91 : 0.92
-    y *= isF ? 1.04 : 1.09
-    z *= isF ? 0.94 : 0.98
+    // Cute youthful 20yo Western heart-oval cranium
+    x *= isF ? 0.9 : 0.92
+    y *= isF ? 0.985 : 1.09
+    z *= isF ? 0.95 : 0.98
 
-    // Delicate anime chin taper on female, angular jaw on male
+    // Delicate dainty chin taper
     if (y < 0) {
-      const low = Math.min(1, Math.abs(y) / 0.125)
-      const jawNarrow = isF ? 1 - low * 0.4 : 1 - low * 0.22
+      const low = Math.min(1, Math.abs(y) / 0.118)
+      const jawNarrow = isF ? 1 - low * 0.36 : 1 - low * 0.22
       x *= jawNarrow
       if (z < 0) {
-        z -= Math.pow(low, 2.0) * (isF ? 0.005 : 0.012)
+        z -= Math.pow(low, 2.0) * (isF ? 0.004 : 0.012)
       } else {
-        z *= 1 - low * (isF ? 0.24 : 0.18)
+        z *= 1 - low * (isF ? 0.2 : 0.18)
       }
     }
 
-    // Front face landmarks (-Z)
+    // Front face anatomical sculpting (-Z)
     if (z < -0.02) {
       const fWeight = Math.min(1, (-z - 0.02) / 0.075)
 
-      // Gentle shallow eye seat (keeps large curved anime sclera smooth without dark pits)
-      const leftEyeDist = gaussian(x + 0.036, y - 0.008, 0.028, 0.02)
-      const rightEyeDist = gaussian(x - 0.036, y - 0.008, 0.028, 0.02)
+      // 1. Wide bright Western orbital plane
+      const leftEyeDist = gaussian(x + 0.035, y - 0.012, 0.025, 0.014)
+      const rightEyeDist = gaussian(x - 0.035, y - 0.012, 0.025, 0.014)
       const socketDepth = Math.max(leftEyeDist, rightEyeDist)
-      z += socketDepth * (isF ? 0.005 : 0.017) * fWeight
+      z += socketDepth * (isF ? 0.0085 : 0.018) * fWeight
 
-      // Subtle brow (minimal on female anime face so forehead bangs look seamless)
-      const leftBrow = gaussian(x + 0.034, y - 0.038, 0.028, 0.011)
-      const rightBrow = gaussian(x - 0.034, y - 0.038, 0.028, 0.011)
-      const glabella = gaussian(x, y - 0.035, 0.016, 0.012)
-      z -= (Math.max(leftBrow, rightBrow) * 0.007 + glabella * 0.004) * (isF ? 0.22 : 1.0) * fWeight
+      // 2. Soft Youthful Brow Arch
+      const leftBrow = gaussian(x + 0.034, y - 0.036, 0.027, 0.01)
+      const rightBrow = gaussian(x - 0.034, y - 0.036, 0.027, 0.01)
+      const glabella = gaussian(x, y - 0.034, 0.015, 0.011)
+      z -= (Math.max(leftBrow, rightBrow) * 0.006 + glabella * 0.0035) * (isF ? 0.45 : 1.0) * fWeight
 
-      // Delicate petite anime nose vs sculpted athlete nasal bridge
-      const bridge = gaussian(x, y - 0.002, isF ? 0.008 : 0.013, isF ? 0.018 : 0.03)
-      const tip = gaussian(x, y + 0.022, isF ? 0.0085 : 0.014, isF ? 0.008 : 0.013)
-      const alarL = gaussian(x + 0.014, y + 0.025, 0.009, 0.008)
-      const alarR = gaussian(x - 0.014, y + 0.025, 0.009, 0.008)
+      // 3. Cute Petite Slightly-Upturned Western Button Nose
+      const bridge = gaussian(x, y - 0.001, isF ? 0.009 : 0.013, 0.024)
+      const tip = gaussian(x, y + 0.018, isF ? 0.0095 : 0.014, isF ? 0.009 : 0.013)
+      const alarL = gaussian(x + 0.011, y + 0.02, 0.007, 0.006)
+      const alarR = gaussian(x - 0.011, y + 0.02, 0.007, 0.006)
       z -=
-        (bridge * (isF ? 0.005 : 0.016) +
-          tip * (isF ? 0.014 : 0.026) +
-          (isF ? 0 : (alarL + alarR) * 0.01)) *
+        (bridge * (isF ? 0.009 : 0.016) +
+          tip * (isF ? 0.0135 : 0.026) +
+          (alarL + alarR) * (isF ? 0.0035 : 0.01)) *
         fWeight
-      y -= tip * (isF ? 0.002 : 0.004) * fWeight
+      y += tip * (isF ? 0.0012 : -0.004) * fWeight
 
-      // Soft round anime cheek warmth
-      const cheekL = gaussian(x + 0.052, y + 0.018, 0.028, 0.022)
-      const cheekR = gaussian(x - 0.052, y + 0.018, 0.028, 0.022)
-      const cheekPush = Math.max(cheekL, cheekR) * (isF ? 0.0075 : 0.009) * fWeight
+      // 4. Cute Youthful Cheek Apples
+      const cheekL = gaussian(x + 0.048, y + 0.015, 0.027, 0.021)
+      const cheekR = gaussian(x - 0.048, y + 0.015, 0.027, 0.021)
+      const cheekPush = Math.max(cheekL, cheekR) * (isF ? 0.0085 : 0.009) * fWeight
       z -= cheekPush
       x += Math.sign(x) * Math.max(cheekL, cheekR) * 0.003 * fWeight
 
-      // Delicate smile / sculpted mouth plane
-      const upperLip = gaussian(x, y + 0.05, 0.02, 0.0065)
-      const lowerLip = gaussian(x, y + 0.058, 0.018, 0.007)
-      const mouthGroove = gaussian(x, y + 0.054, 0.02, 0.0028)
-      const chinBoss = gaussian(x, y + 0.088, 0.022, 0.015)
+      // 5. Gentle Sculpted Rose Lips & Smooth Rounded Chin
+      const upperLip = gaussian(x, y + 0.045, isF ? 0.02 : 0.024, 0.006)
+      const lowerLip = gaussian(x, y + 0.054, isF ? 0.018 : 0.021, 0.007)
+      const mouthGroove = gaussian(x, y + 0.049, isF ? 0.02 : 0.025, 0.0025)
+      const chinBoss = gaussian(x, y + 0.082, 0.02, 0.014)
       z -=
-        (upperLip * (isF ? 0.004 : 0.01) +
-          lowerLip * (isF ? 0.004 : 0.0095) -
-          mouthGroove * (isF ? 0.002 : 0.005) +
-          chinBoss * (isF ? 0.0035 : 0.008)) *
+        (upperLip * (isF ? 0.0065 : 0.01) +
+          lowerLip * (isF ? 0.007 : 0.0095) -
+          mouthGroove * (isF ? 0.003 : 0.005) +
+          chinBoss * (isF ? 0.004 : 0.008)) *
         fWeight
     }
 
     // Subtle ear pinna bulge on temporal sides (±X)
     const earMask =
-      gaussian(Math.abs(x) - 0.098, y + 0.006, 0.02, 0.024) * gaussian(z - 0.01, 0, 0.024, 1)
-    if (Math.abs(x) > 0.084 && Math.abs(y + 0.006) < 0.038) {
-      x += Math.sign(x) * earMask * 0.015
+      gaussian(Math.abs(x) - 0.096, y + 0.006, 0.02, 0.022) * gaussian(z - 0.01, 0, 0.022, 1)
+    if (Math.abs(x) > 0.082 && Math.abs(y + 0.006) < 0.034) {
+      x += Math.sign(x) * earMask * 0.012
     }
 
     // Cylindrical planar UV aligned centered on -Z (u=0.5 front)
@@ -921,6 +1117,109 @@ export function buildUnitySculptedHeadGeometry(gender: AvatarGender): THREE.Buff
 }
 
 /**
+ * Generates sculpted smooth center-parted layered long hair ribbons & flowing back veil
+ * framing forehead, cheeks and shoulders cleanly without protruding cap/cone seams.
+ */
+export function buildSculptedLongHairGeometry(): THREE.BufferGeometry {
+  const positions: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  const addRibbon = (
+    uSegs: number,
+    vSegs: number,
+    evalPt: (u: number, v: number) => [number, number, number]
+  ) => {
+    const base = positions.length / 3
+    const rowLen = uSegs + 1
+    for (let r = 0; r <= vSegs; r++) {
+      const v = r / vSegs
+      for (let c = 0; c <= uSegs; c++) {
+        const u = c / uSegs
+        const [x, y, z] = evalPt(u, v)
+        positions.push(x, y, z)
+        uvs.push(u, v)
+      }
+    }
+    for (let r = 0; r < vSegs; r++) {
+      for (let c = 0; c < uSegs; c++) {
+        const a = base + r * rowLen + c
+        const b = a + 1
+        const cIdx = base + (r + 1) * rowLen + c
+        const d = cIdx + 1
+        indices.push(a, cIdx, b, b, cIdx, d)
+      }
+    }
+  }
+
+  // 1. Cranial parted dome hugging skull cleanly from center part apex outward to back/temples
+  // Leave clean center inverted-V forehead parting open over front (-Z)!
+  addRibbon(28, 16, (u, v) => {
+    const theta = u * Math.PI * 2 // 0 = +Z back, PI = -Z front
+    const frontProximity = Math.max(0, -Math.cos(theta)) // 1 at forehead center, 0 at ears/back
+    // Raise front hairline neatly into center-part arch over forehead
+    const maxPhi = Math.PI * (0.64 - Math.pow(frontProximity, 1.35) * 0.36)
+    const phi = 0.06 + v * maxPhi // polar angle from crown top
+    const sinP = Math.sin(phi)
+    const cosP = Math.cos(phi)
+    // Gentle center-part furrow along top crown (-Z to +Z top seam)
+    const partDip = Math.exp(-Math.pow(Math.sin(theta) / 0.18, 2)) * (1 - v) * 0.008
+    const r = 0.119 - partDip
+    return [Math.sin(theta) * sinP * r * 0.95, cosP * r * 1.03 + 0.006, Math.cos(theta) * sinP * r * 0.99]
+  })
+
+  // 2. Full flowing back hair curtain behind ears down onto upper back/shoulders
+  addRibbon(20, 14, (u, v) => {
+    // u across back arc (-PI*0.64 to +PI*0.64 around +Z back)
+    const theta = (u - 0.5) * Math.PI * 1.32
+    const y = 0.04 - v * 0.29 // +0.04 down to -0.25 behind neck/shoulders
+    const radiusW = 0.112 + Math.sin(v * Math.PI) * 0.022 - v * 0.014
+    const depthZ = 0.106 + Math.sin(v * Math.PI * 0.75) * 0.024
+    return [Math.sin(theta) * radiusW, y, Math.cos(theta) * depthZ + 0.01]
+  })
+
+  // 3. Left & Right Center-Parted Front Curtain Layers draping gracefully past jawline onto chest
+  for (const side of [-1, 1] as const) {
+    for (let layer = 0; layer < 3; layer++) {
+      const layerSpreadZ = layer * 0.018
+      const layerOutX = layer * 0.007
+      const endDropY = -0.24 - layer * 0.02
+      addRibbon(6, 16, (u, v) => {
+        // v = 0 starts flush at top crown center part (±0.004, +0.123, -0.025)
+        const s = v
+        const mid = Math.sin(s * Math.PI)
+        const centerX =
+          side *
+          (0.005 +
+            Math.pow(s, 0.68) * (0.094 + layerOutX) -
+            Math.pow(Math.max(0, s - 0.55) / 0.45, 1.5) * 0.018)
+        const centerY = 0.124 - Math.pow(s, 1.15) * (0.124 - endDropY)
+        const centerZ =
+          -0.028 -
+          mid * (0.072 - layerSpreadZ) +
+          Math.pow(Math.max(0, s - 0.4) / 0.6, 1.4) * 0.028 +
+          layerSpreadZ * 0.5
+
+        // Ribbon width tapers gently toward wispy tips at shoulder/collarbone
+        const width = 0.036 * (0.45 + 0.75 * Math.sin(Math.min(1, s * 1.1) * Math.PI * 0.7)) * (1 - Math.pow(s, 2.4) * 0.65)
+        const across = (u - 0.5) * 2
+        const nx = across * width * 0.55
+        const nz = across * width * 0.84 * -side * 0.35
+        const curlCurve = Math.sin(u * Math.PI) * 0.007
+        return [centerX + nx + side * curlCurve, centerY, centerZ + nz - curlCurve * 0.5]
+      })
+    }
+  }
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geo.setIndex(indices)
+  geo.computeVertexNormals()
+  return geo
+}
+
+/**
  * Creates PBR Albedo + Tangent-Space Bump Map textures for Knit Sweater Vest / Uniform Top & Skirt / Trousers.
  */
 export function createUnityBodyTextures(opts: {
@@ -930,12 +1229,54 @@ export function createUnityBodyTextures(opts: {
   accentColor: string
   skinColor: string
   gender: AvatarGender
-  uniformStyle: 'casual' | 'sport' | 'cricket'
+  uniformStyle: 'casual' | 'nerdy' | 'sport' | 'cricket'
 }): {
+  skinAlbedo: THREE.CanvasTexture
+  skinBump: THREE.CanvasTexture
   clothAlbedo: THREE.CanvasTexture
   clothBump: THREE.CanvasTexture
   pantsAlbedo: THREE.CanvasTexture
 } {
+  // 0. Organic Living Dermal Albedo & Fine Pore Bump Texture (matching sculpted face warmth)
+  const sCanvas = document.createElement('canvas')
+  sCanvas.width = 256
+  sCanvas.height = 256
+  const sCtx = sCanvas.getContext('2d')!
+  sCtx.fillStyle = opts.skinColor
+  sCtx.fillRect(0, 0, 256, 256)
+  for (let i = 0; i < 420; i++) {
+    const sx = (i * 73) % 256
+    const sy = (i * 139) % 256
+    const rad = 10 + (i % 14)
+    sCtx.fillStyle = i % 2 === 0 ? 'rgba(255, 224, 206, 0.055)' : 'rgba(232, 146, 126, 0.04)'
+    sCtx.beginPath()
+    sCtx.arc(sx, sy, rad, 0, Math.PI * 2)
+    sCtx.fill()
+  }
+  const skinAlbedo = new THREE.CanvasTexture(sCanvas)
+  skinAlbedo.colorSpace = THREE.SRGBColorSpace
+  skinAlbedo.wrapS = THREE.RepeatWrapping
+  skinAlbedo.wrapT = THREE.RepeatWrapping
+  skinAlbedo.needsUpdate = true
+
+  const sbCanvas = document.createElement('canvas')
+  sbCanvas.width = 128
+  sbCanvas.height = 128
+  const sbCtx = sbCanvas.getContext('2d')!
+  sbCtx.fillStyle = '#808080'
+  sbCtx.fillRect(0, 0, 128, 128)
+  for (let y = 0; y < 128; y += 2) {
+    for (let x = 0; x < 128; x += 2) {
+      const v = 124 + ((x * 17 + y * 31) % 9)
+      sbCtx.fillStyle = `rgb(${v},${v},${v})`
+      sbCtx.fillRect(x, y, 1, 1)
+    }
+  }
+  const skinBump = new THREE.CanvasTexture(sbCanvas)
+  skinBump.wrapS = THREE.RepeatWrapping
+  skinBump.wrapT = THREE.RepeatWrapping
+  skinBump.needsUpdate = true
+
   // 1. Upper Garment Texture (u=0.5 -> x=256 is front -Z)
   const cCanvas = document.createElement('canvas')
   cCanvas.width = 512
@@ -944,8 +1285,22 @@ export function createUnityBodyTextures(opts: {
   ctx.fillStyle = opts.topColor
   ctx.fillRect(0, 0, 512, 512)
 
-  // Knit sweater micro-texture for casual, jersey weave for sport
-  if (opts.uniformStyle === 'casual') {
+  if (opts.uniformStyle === 'casual' && opts.gender === 'female') {
+    // Soft ivory fine-ribbed cropped mock-neck knit texture
+    for (let x = 0; x < 512; x += 4) {
+      ctx.fillStyle = x % 8 === 0 ? 'rgba(170, 152, 136, 0.16)' : 'rgba(255, 255, 255, 0.14)'
+      ctx.fillRect(x, 0, 1.6, 512)
+    }
+    for (let y = 0; y < 512; y += 5) {
+      ctx.fillStyle = 'rgba(120, 102, 86, 0.04)'
+      ctx.fillRect(0, y, 512, 1)
+    }
+    // Delicate ribbed knit bottom hem band
+    for (let x = 0; x < 512; x += 6) {
+      ctx.fillStyle = x % 12 === 0 ? 'rgba(255,255,255,0.18)' : 'rgba(130, 112, 98, 0.18)'
+      ctx.fillRect(x, 385, 2.5, 45)
+    }
+  } else if (opts.uniformStyle === 'nerdy' || opts.uniformStyle === 'casual') {
     for (let x = 0; x < 512; x += 4) {
       ctx.fillStyle = x % 8 === 0 ? 'rgba(255, 255, 255, 0.028)' : 'rgba(0, 0, 0, 0.06)'
       ctx.fillRect(x, 0, 1.5, 512)
@@ -953,6 +1308,20 @@ export function createUnityBodyTextures(opts: {
     for (let y = 0; y < 512; y += 3) {
       ctx.fillStyle = 'rgba(0, 0, 0, 0.04)'
       ctx.fillRect(0, y, 512, 1)
+    }
+
+    if (opts.uniformStyle === 'nerdy') {
+      // Classic preppy diamond argyle pattern on vest front & back
+      ctx.strokeStyle = 'rgba(226, 232, 240, 0.22)'
+      ctx.lineWidth = 2
+      for (let gx = -512; gx < 1024; gx += 48) {
+        ctx.beginPath()
+        ctx.moveTo(gx, 90)
+        ctx.lineTo(gx + 340, 430)
+        ctx.moveTo(gx + 340, 90)
+        ctx.lineTo(gx, 430)
+        ctx.stroke()
+      }
     }
 
     // Crisp White Collared Shirt V-neck peeking cleanly out of sweater vest front (u=0.5 -> x=256)
@@ -965,7 +1334,7 @@ export function createUnityBodyTextures(opts: {
     ctx.fill()
 
     // Subtle sweater V-neck knitted trim border
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)'
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)'
     ctx.lineWidth = 4
     ctx.beginPath()
     ctx.moveTo(220, 85)
@@ -1019,7 +1388,7 @@ export function createUnityBodyTextures(opts: {
   clothBump.wrapT = THREE.RepeatWrapping
   clothBump.needsUpdate = true
 
-  // 3. Pleated Skirt / Trousers Texture
+  // 3. Pleated Skirt (Burgundy Chic or Tartan Nerdy Plaid) / Trousers Texture
   const pCanvas = document.createElement('canvas')
   pCanvas.width = 256
   pCanvas.height = 256
@@ -1027,7 +1396,17 @@ export function createUnityBodyTextures(opts: {
   pCtx.fillStyle = opts.pantsColor
   pCtx.fillRect(0, 0, 256, 256)
 
-  if (opts.uniformStyle === 'casual' && opts.gender === 'female') {
+  if ((opts.uniformStyle === 'casual' || opts.uniformStyle === 'nerdy') && opts.gender === 'female') {
+    if (opts.uniformStyle === 'nerdy') {
+      // Classic preppy tartan check plaid pattern
+      pCtx.fillStyle = 'rgba(185, 28, 28, 0.28)'
+      for (let x = 0; x < 256; x += 32) pCtx.fillRect(x, 0, 6, 256)
+      for (let y = 0; y < 256; y += 32) pCtx.fillRect(0, y, 256, 6)
+      pCtx.fillStyle = 'rgba(248, 250, 252, 0.22)'
+      for (let x = 16; x < 256; x += 32) pCtx.fillRect(x, 0, 2, 256)
+      for (let y = 16; y < 256; y += 32) pCtx.fillRect(0, y, 256, 2)
+    }
+
     // Crisp dark vertical accordion-pleat ambient crease shadows (18 pleats around UV width)
     const step = 256 / 18
     for (let i = 0; i < 18; i++) {
@@ -1052,7 +1431,7 @@ export function createUnityBodyTextures(opts: {
   pantsAlbedo.wrapS = THREE.RepeatWrapping
   pantsAlbedo.needsUpdate = true
 
-  return { clothAlbedo, clothBump, pantsAlbedo }
+  return { skinAlbedo, skinBump, clothAlbedo, clothBump, pantsAlbedo }
 }
 
 /**
@@ -1071,78 +1450,69 @@ export function createUnityFaceTexture(
   ctx.fillStyle = profile.skinColor
   ctx.fillRect(0, 0, 512, 512)
 
-  // Ultra-clean gentle skin warmth falloff toward jaw/nape
-  const grad = ctx.createRadialGradient(256, 240, 65, 256, 250, 240)
+  // Clean wide luminosity preserving face & chin warmth without dark jaw rings
+  const grad = ctx.createRadialGradient(256, 250, 75, 256, 256, 310)
   grad.addColorStop(0, profile.skinColor)
-  grad.addColorStop(0.82, profile.skinColor)
+  grad.addColorStop(0.86, profile.skinColor)
   grad.addColorStop(1, profile.skinShadow)
   ctx.fillStyle = grad
   ctx.fillRect(0, 0, 512, 512)
 
-  // Soft anime rosy cheek blush below eyes
-  ctx.fillStyle = isF ? 'rgba(244, 130, 134, 0.25)' : 'rgba(205, 112, 95, 0.12)'
+  // Youthful rosy peach blush across cheek apples
+  ctx.fillStyle = isF ? 'rgba(245, 130, 136, 0.22)' : 'rgba(205, 112, 95, 0.12)'
   ctx.beginPath()
-  ctx.ellipse(210, 286, 24, 13, -0.1, 0, Math.PI * 2)
-  ctx.ellipse(302, 286, 24, 13, 0.1, 0, Math.PI * 2)
+  ctx.ellipse(210, 276, 25, 15, -0.14, 0, Math.PI * 2)
+  ctx.ellipse(302, 276, 25, 15, 0.14, 0, Math.PI * 2)
   ctx.fill()
 
-  if (isF) {
-    // Clean delicate anime nose tip tint (no heavy dark nostril circles!)
-    ctx.fillStyle = 'rgba(255, 248, 242, 0.28)'
-    ctx.fillRect(253, 248, 6, 36)
-    ctx.fillStyle = 'rgba(188, 120, 102, 0.22)'
-    ctx.beginPath()
-    ctx.ellipse(256, 290, 4.5, 2.2, 0, 0, Math.PI * 2)
-    ctx.fill()
-  } else {
-    ctx.fillStyle = 'rgba(255, 245, 235, 0.18)'
-    ctx.fillRect(252, 224, 8, 56)
-    ctx.fillStyle = 'rgba(60, 28, 18, 0.24)'
-    ctx.beginPath()
-    ctx.ellipse(247, 294, 4, 2.2, 0, 0, Math.PI * 2)
-    ctx.ellipse(265, 294, 4, 2.2, 0, 0, Math.PI * 2)
-    ctx.fill()
-  }
+  // Button-nose highlight & delicate subtle nostrils aligned to canvasY ~ 298
+  ctx.fillStyle = 'rgba(255, 246, 240, 0.24)'
+  ctx.fillRect(253, 232, 6, 50)
+  ctx.fillStyle = isF ? 'rgba(165, 96, 84, 0.16)' : 'rgba(60, 28, 18, 0.24)'
+  ctx.beginPath()
+  ctx.ellipse(248, 298, 3.2, 1.8, 0.12, 0, Math.PI * 2)
+  ctx.ellipse(264, 298, 3.2, 1.8, -0.12, 0, Math.PI * 2)
+  ctx.fill()
 
-  // Painted expressive anime eyebrows
+  // Warm peach-rose eyelid fold (zero grayish/black smudge above sclera)
+  ctx.fillStyle = isF ? 'rgba(195, 126, 114, 0.14)' : 'rgba(75, 45, 38, 0.12)'
+  ctx.beginPath()
+  ctx.ellipse(227, 232, 16, 7.5, 0.06, 0, Math.PI * 2)
+  ctx.ellipse(285, 232, 16, 7.5, -0.06, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Warm soft arched eyebrows with upbeat graceful curve (canvasY ~ 192)
   ctx.strokeStyle = profile.hairColor
   ctx.lineWidth = isF ? 3.2 : 6.0
   ctx.lineCap = 'round'
   ctx.beginPath()
-  ctx.moveTo(206, 200)
-  ctx.quadraticCurveTo(226, 193, 242, 200)
-  ctx.moveTo(270, 200)
-  ctx.quadraticCurveTo(286, 193, 306, 200)
+  ctx.moveTo(205, 198)
+  ctx.quadraticCurveTo(228, 187, 245, 196)
+  ctx.moveTo(267, 196)
+  ctx.quadraticCurveTo(284, 187, 307, 198)
   ctx.stroke()
 
-  // Delicate cheerful anime smile / natural lips
+  // Full sculpted natural Cupid's bow & gentle smile curve (corners softly lifted!)
+  ctx.fillStyle = profile.lipColor
+  ctx.beginPath()
+  ctx.moveTo(234, 355)
+  ctx.quadraticCurveTo(247, 347, 256, 351)
+  ctx.quadraticCurveTo(265, 347, 278, 355)
+  ctx.quadraticCurveTo(256, 372, 234, 355)
+  ctx.closePath()
+  ctx.fill()
   if (isF) {
-    ctx.strokeStyle = 'rgba(155, 86, 78, 0.72)'
-    ctx.lineWidth = 2.6
+    ctx.fillStyle = 'rgba(255, 230, 226, 0.36)'
     ctx.beginPath()
-    ctx.moveTo(240, 355)
-    ctx.quadraticCurveTo(256, 363, 272, 355)
-    ctx.stroke()
-    ctx.fillStyle = 'rgba(232, 138, 134, 0.28)'
-    ctx.beginPath()
-    ctx.ellipse(256, 362, 12, 4, 0, 0, Math.PI * 2)
+    ctx.ellipse(256, 363, 8.5, 2.4, 0, 0, Math.PI * 2)
     ctx.fill()
-  } else {
-    ctx.fillStyle = profile.lipColor
-    ctx.beginPath()
-    ctx.moveTo(234, 356)
-    ctx.quadraticCurveTo(246, 346, 256, 351)
-    ctx.quadraticCurveTo(266, 346, 278, 356)
-    ctx.quadraticCurveTo(256, 370, 234, 356)
-    ctx.closePath()
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(60, 20, 20, 0.4)'
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    ctx.moveTo(236, 356)
-    ctx.lineTo(276, 356)
-    ctx.stroke()
   }
+  ctx.strokeStyle = 'rgba(92, 42, 44, 0.36)'
+  ctx.lineWidth = 1.6
+  ctx.beginPath()
+  ctx.moveTo(236, 355)
+  ctx.quadraticCurveTo(256, 361, 276, 355)
+  ctx.stroke()
 
   if (!isF && profile.hasBeard) {
     ctx.fillStyle = 'rgba(24, 18, 15, 0.28)'

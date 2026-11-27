@@ -10,6 +10,7 @@ export interface RealisticHumanAvatarProps {
   gender: AvatarGender
   outfitColor?: string
   accentColor?: string
+  uniformStyle?: 'casual' | 'nerdy' | 'sport' | 'cricket'
   hideHead?: boolean
   speakingLevel?: number
   getBodyAnchor: () => UnityCharacterBodyAnchor
@@ -31,6 +32,7 @@ export function RealisticHumanAvatar({
   gender,
   outfitColor,
   accentColor,
+  uniformStyle = 'casual',
   hideHead = false,
   speakingLevel = 0,
   getBodyAnchor,
@@ -48,7 +50,7 @@ export function RealisticHumanAvatar({
       gender={gender}
       outfitColor={outfitColor}
       accentColor={accentColor}
-      uniformStyle="casual"
+      uniformStyle={uniformStyle}
       hideHead={hideHead}
       showHair
       allowSunglasses={false}

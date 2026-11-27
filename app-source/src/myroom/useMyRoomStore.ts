@@ -73,6 +73,7 @@ export interface MyRoomAIRuntime {
   targetObjId: string | null
   dartAimTimerSec: number
   dartDispatchedMatchThrowIdx: number
+  desktopRotateDrag?: boolean
 }
 
 export const myRoomRuntime = {
@@ -354,7 +355,18 @@ export function deleteRuntimeCraftObject(id: string, broadcast = true): void {
   if (!existing) return
   existing.meshData.geometry.dispose()
   myRoomRuntime.objects.delete(id)
-  useMyRoomStore.getState().bumpObjectListVersion()
+  if (myRoomRuntime.ai.holdingObjId === id) {
+    myRoomRuntime.ai.holdingObjId = null
+  }
+  if (myRoomRuntime.ai.targetObjId === id) {
+    myRoomRuntime.ai.targetObjId = null
+  }
+  myRoomRuntime.ai.collectedIds = myRoomRuntime.ai.collectedIds.filter((c) => c !== id)
+  const st = useMyRoomStore.getState()
+  if (st.selectedCraftId === id) {
+    st.setSelectedCraftId(null)
+  }
+  st.bumpObjectListVersion()
   if (broadcast) {
     myRoomRuntime.onCraftRemoveSend?.(id)
   }
@@ -368,6 +380,11 @@ export function clearAllMyRoomObjects(onlyCreatorId?: string): void {
     }
   })
   toDelete.forEach((id) => deleteRuntimeCraftObject(id, true))
+}
+
+export function clearAllCreatedRoomContent(): void {
+  clearAllMyRoomObjects()
+  clearAllMyRoomDecor()
 }
 
 export function stripToNetState(obj: RuntimeCraftObject): CraftObjectNetState {
@@ -447,6 +464,8 @@ export function buildDartStateSyncPayload(s: DartGameUIState): DartStateNetPaylo
   }
 }
 
+export type MyRoomAIDressupStyle = 'chic' | 'nerdy' | 'sport'
+
 export interface MyRoomStoreState {
   selectedKind: CraftMaterialKind
   selectedClayPreset: ClayShapePreset
@@ -460,7 +479,11 @@ export interface MyRoomStoreState {
   testerIsLive: boolean
   showSelfBody: boolean
   showAiOpponent: boolean
+  aiDressupStyle: MyRoomAIDressupStyle
+  aiCanProduceObjects: boolean
+  aiAutoRotate: boolean
   showcaseOpen: boolean
+  selectedCraftId: string | null
   selectedDecorId: string | null
   decorCount: number
   decorVersion: number
@@ -483,7 +506,13 @@ export interface MyRoomStoreState {
   setTesterState: (readout: string, isLive: boolean) => void
   setShowSelfBody: (show: boolean) => void
   setShowAiOpponent: (show: boolean) => void
+  setAiDressupStyle: (style: MyRoomAIDressupStyle) => void
+  setAiCanProduceObjects: (enabled: boolean) => void
+  setAiAutoRotate: (enabled: boolean) => void
+  rotateAiModelBy: (deltaYaw: number) => void
+  resetAiModelRotation: () => void
   setShowcaseOpen: (open: boolean) => void
+  setSelectedCraftId: (id: string | null) => void
   setSelectedDecorId: (id: string | null) => void
   bumpDecorVersion: () => void
   setOpponentMode: (mode: MyRoomOpponentMode) => void
@@ -517,7 +546,11 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
   testerIsLive: false,
   showSelfBody: true,
   showAiOpponent: true,
+  aiDressupStyle: 'chic',
+  aiCanProduceObjects: false,
+  aiAutoRotate: false,
   showcaseOpen: false,
+  selectedCraftId: null,
   selectedDecorId: null,
   decorCount: 0,
   decorVersion: 0,
@@ -553,7 +586,42 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
   setTesterState: (testerReadout, testerIsLive) => set({ testerReadout, testerIsLive }),
   setShowSelfBody: (showSelfBody) => set({ showSelfBody }),
   setShowcaseOpen: (showcaseOpen) => set({ showcaseOpen }),
+  setSelectedCraftId: (selectedCraftId) => set({ selectedCraftId }),
   setSelectedDecorId: (selectedDecorId) => set({ selectedDecorId }),
+  setAiDressupStyle: (aiDressupStyle) =>
+    set({
+      aiDressupStyle,
+      statusHint:
+        aiDressupStyle === 'sport'
+          ? 'AI Companion dressup: Sleek Athletic Trackwear'
+          : aiDressupStyle === 'nerdy'
+            ? 'AI Companion dressup: Preppy Nerdy Argyle Vest, Plaid Skirt & Glasses'
+            : 'AI Companion dressup: Chic Mock-Neck Knit Top & Burgundy Pleated Skirt',
+    }),
+  setAiCanProduceObjects: (aiCanProduceObjects) => {
+    if (!aiCanProduceObjects && myRoomRuntime.ai.actionMode === 'sculpt') {
+      myRoomRuntime.ai.actionMode = 'idle'
+    }
+    set({
+      aiCanProduceObjects,
+      statusHint: aiCanProduceObjects
+        ? 'AI Companion crafting ON — will create Clay, Paper & Cloth objects'
+        : 'AI Companion object production stopped (user creations remain welcome)',
+    })
+  },
+  setAiAutoRotate: (aiAutoRotate) =>
+    set({
+      aiAutoRotate,
+      statusHint: aiAutoRotate ? 'Model 360° auto-rotation ON' : 'Model auto-rotation paused',
+    }),
+  rotateAiModelBy: (deltaYaw) => {
+    myRoomRuntime.ai.yaw += deltaYaw
+    set({ aiAutoRotate: false })
+  },
+  resetAiModelRotation: () => {
+    myRoomRuntime.ai.yaw = 0
+    set({ aiAutoRotate: false, statusHint: 'Reset model facing forward' })
+  },
   bumpDecorVersion: () =>
     set((s) => ({
       decorVersion: s.decorVersion + 1,
@@ -758,6 +826,7 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
       objectListVersion: s.objectListVersion + 1,
       decorCount: 0,
       decorVersion: s.decorVersion + 1,
+      selectedCraftId: null,
       selectedDecorId: null,
       showcaseOpen: false,
       scannedSurfaceCount: 0,
