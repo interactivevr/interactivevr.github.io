@@ -374,12 +374,27 @@ class P2PGameClient {
         curr.spin = [...incoming.spin]
         curr.bowlingStyle = incoming.bowlingStyle
         curr.spinDir = incoming.spinDir
+        curr.spinKind = incoming.spinKind
+        curr.spinRpm = incoming.spinRpm
+        curr.releaseSpeedMps = incoming.releaseSpeedMps
+        curr.predictedDropPos = incoming.predictedDropPos ? [...incoming.predictedDropPos] : null
+        curr.pitchLengthLabel = incoming.pitchLengthLabel
         curr.bouncedOnPitch = incoming.bouncedOnPitch
         curr.bouncedAfterHit = incoming.bouncedAfterHit
         curr.hitByBat = incoming.hitByBat
         curr.edgeContact = incoming.edgeContact
         curr.timestamp = incoming.timestamp
         curr.deadTimerSec = 0
+
+        if (incoming.phase === 'bowled' && incoming.releaseSpeedMps) {
+          useCricketStore.getState().setDeliveryTelemetry({
+            speedKmh: Math.round(incoming.releaseSpeedMps * 3.6),
+            spinKind: incoming.spinKind ?? (incoming.bowlingStyle === 'fast' ? 'fast' : 'no-spin'),
+            spinRpm: incoming.spinRpm ?? 0,
+            dropPoint: incoming.predictedDropPos ?? null,
+            pitchLengthLabel: incoming.pitchLengthLabel ?? '',
+          })
+        }
 
         if (elapsedSec > 0.004) {
           curr.vel = [incoming.vel[0], incoming.vel[1] - 9.81 * elapsedSec, incoming.vel[2]]

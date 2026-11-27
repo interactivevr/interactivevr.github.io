@@ -248,10 +248,13 @@ function ComputerCricketPlayer({
       px = cricketRuntime.aiBowlerPos[0]
       pz = cricketRuntime.aiBowlerPos[2]
       yaw = Math.PI
-      const isRunup = cricketRuntime.ball.phase === 'ready'
-      const runP = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / 1.55))
+      const isRunup = cricketRuntime.ball.phase === 'ready' && !cricketRuntime.aiBowlerWaiting
+      const totalSec = Math.max(0.35, cricketRuntime.aiBowlTotalSec)
+      const runP = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / totalSec))
       animRef.current.runSpeed = isRunup ? 0.95 : 0
-      if (isRunup) {
+      if (cricketRuntime.aiBowlerWaiting) {
+        bowlArmAngleRef.current = -0.3
+      } else if (isRunup) {
         animRef.current.runPhase += cDt * 12
         // Single authentic arm gather & overarm release sweep at end of run-up
         bowlArmAngleRef.current = runP < 0.68 ? -0.4 : -0.4 + ((runP - 0.68) / 0.32) * (Math.PI * 1.45)
@@ -321,9 +324,13 @@ function ComputerCricketPlayer({
       leftWristRef.current = [px - 0.28 * cosY, 1.82 + cheerBob, pz + 0.28 * sinY]
       rightWristRef.current = [px + 0.28 * cosY, 1.82 + cheerBob, pz - 0.28 * sinY]
     } else if (role === 'bowler') {
-      const runP = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / 1.55))
+      const totalSec = Math.max(0.35, cricketRuntime.aiBowlTotalSec)
+      const runP = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / totalSec))
       const swingOff = Math.sin(animRef.current.runPhase) * 0.22 * animRef.current.runSpeed
-      if (cricketRuntime.ball.phase === 'ready' && runP < 0.68) {
+      if (cricketRuntime.aiBowlerWaiting) {
+        leftWristRef.current = [px - 0.18 * cosY, 1.18, pz + 0.18 * sinY + 0.12]
+        rightWristRef.current = [px + 0.18 * cosY, 1.15, pz - 0.18 * sinY + 0.12]
+      } else if (cricketRuntime.ball.phase === 'ready' && runP < 0.68) {
         // Pumping running arms during run-up
         leftWristRef.current = [px - 0.24 * cosY, 1.12 + swingOff, pz + 0.24 * sinY + swingOff]
         rightWristRef.current = [px + 0.24 * cosY, 1.12 - swingOff, pz - 0.24 * sinY - swingOff]

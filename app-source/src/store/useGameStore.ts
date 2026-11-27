@@ -123,6 +123,7 @@ export interface GameStoreState {
   micStatus: 'off' | 'connecting' | 'active' | 'denied' | 'unavailable'
   xrSupported: boolean
   inXR: boolean
+  vrMenuVisible: boolean
   pointerLocked: boolean
   throwCharge: number
   desktopCatchActive: boolean
@@ -141,6 +142,8 @@ export interface GameStoreState {
   setMicStatus: (status: GameStoreState['micStatus']) => void
   setXrSupported: (supported: boolean) => void
   setInXR: (inXR: boolean) => void
+  setVrMenuVisible: (visible: boolean) => void
+  toggleVrMenu: () => void
   setPointerLocked: (locked: boolean) => void
   setThrowCharge: (charge: number) => void
   setDesktopCatchActive: (active: boolean) => void
@@ -192,6 +195,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   micStatus: 'off',
   xrSupported: false,
   inXR: false,
+  vrMenuVisible: true,
   pointerLocked: false,
   throwCharge: 0,
   desktopCatchActive: false,
@@ -216,7 +220,9 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
   setMicEnabled: (micEnabled) => set({ micEnabled }),
   setMicStatus: (micStatus) => set({ micStatus }),
   setXrSupported: (xrSupported) => set({ xrSupported }),
-  setInXR: (inXR) => set({ inXR, platform: inXR ? 'vr' : get().platform }),
+  setInXR: (inXR) => set({ inXR, platform: inXR ? 'vr' : get().platform, vrMenuVisible: true }),
+  setVrMenuVisible: (vrMenuVisible) => set({ vrMenuVisible }),
+  toggleVrMenu: () => set((s) => ({ vrMenuVisible: !s.vrMenuVisible })),
   setPointerLocked: (pointerLocked) => set({ pointerLocked }),
   setThrowCharge: (throwCharge) => set({ throwCharge }),
   setDesktopCatchActive: (desktopCatchActive) => set({ desktopCatchActive }),
@@ -380,6 +386,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       heldBallCount: 0,
       throwCharge: 0,
       desktopCatchActive: false,
+      vrMenuVisible: true,
       statusBanner: null,
     })
   },

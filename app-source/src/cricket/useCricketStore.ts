@@ -8,11 +8,78 @@ import {
   CricketFormat,
   CricketRole,
   CricketRoleAssignments,
+  CricketSpinKind,
   getMaxBallsForFormat,
   getMaxWicketsForFormat,
   PitchMode,
   SpinDirection,
 } from './types'
+
+export interface InningsBallEvent {
+  ballNum: number
+  overText: string
+  label: string
+  runs: number
+  isWicket: boolean
+  isWide: boolean
+  speedKmh: number
+  spinKind: CricketSpinKind
+  spinRpm: number
+  pitchLength: string
+}
+
+export interface InningsSummarySnapshot {
+  inningsNumber: 1 | 2
+  batterId: string
+  bowlerId: string
+  runs: number
+  wickets: number
+  legalBalls: number
+  fours: number
+  sixes: number
+  wides: number
+  dots: number
+  peakSpeedKmh: number
+  ballLog: InningsBallEvent[]
+}
+
+function buildInningsSummary(opts: {
+  inningsNumber: 1 | 2
+  batterId: string
+  bowlerId: string
+  runs: number
+  wickets: number
+  legalBalls: number
+  ballLog: InningsBallEvent[]
+}): InningsSummarySnapshot {
+  let fours = 0
+  let sixes = 0
+  let wides = 0
+  let dots = 0
+  let peakSpeedKmh = 0
+  for (let i = 0; i < opts.ballLog.length; i++) {
+    const b = opts.ballLog[i]
+    if (b.runs === 4 && !b.isWide) fours += 1
+    else if (b.runs >= 6) sixes += 1
+    if (b.isWide) wides += 1
+    if (b.runs === 0 && !b.isWicket && !b.isWide) dots += 1
+    if (b.speedKmh > peakSpeedKmh) peakSpeedKmh = b.speedKmh
+  }
+  return {
+    inningsNumber: opts.inningsNumber,
+    batterId: opts.batterId,
+    bowlerId: opts.bowlerId,
+    runs: opts.runs,
+    wickets: opts.wickets,
+    legalBalls: opts.legalBalls,
+    fours,
+    sixes,
+    wides,
+    dots,
+    peakSpeedKmh,
+    ballLog: opts.ballLog,
+  }
+}
 
 export interface RuntimeCricketBall extends CricketBallNetState {
   prevPos: [number, number, number]
@@ -58,6 +125,11 @@ function createReadyBall(style: BowlingStyle, spinDir: SpinDirection): RuntimeCr
     spin: [0, 0, 0],
     bowlingStyle: style,
     spinDir,
+    spinKind: style === 'fast' ? 'fast' : 'no-spin',
+    spinRpm: 0,
+    releaseSpeedMps: 0,
+    predictedDropPos: null,
+    pitchLengthLabel: '',
     bouncedOnPitch: false,
     bouncedAfterHit: false,
     hitByBat: false,
@@ -100,7 +172,11 @@ export const cricketRuntime = {
     isRunning: false,
     diving: false,
   })) as AIFielderRuntime[],
-  aiBowlCooldownSec: 1.8,
+  aiBowlCooldownSec: 1.55,
+  aiBowlTotalSec: 1.55,
+  vrControllerActive: false,
+  aiBowlRequested: false,
+  aiBowlerWaiting: false,
   aiBatSwingPhase: 0,
   aiKeeperPos: [0, 0, 12.1] as [number, number, number],
   aiBowlerPos: [0.32, 0, BOWLING_STUMPS_Z - 0.55] as [number, number, number],
@@ -126,6 +202,16 @@ export interface CricketStateSyncPayload {
   recentBalls: string[]
   eventBanner: string | null
   lastOutcomeKind: CricketOutcomeKind
+  lastDeliverySpeedKmh: number
+  lastDeliverySpinKind: CricketSpinKind
+  lastDeliverySpinRpm: number
+  lastDropPoint: [number, number] | null
+  lastPitchLengthLabel: string
+  currentInningsLog: InningsBallEvent[]
+  firstInningsSummary: InningsSummarySnapshot | null
+  secondInningsSummary: InningsSummarySnapshot | null
+  matchResultBanner: string | null
+  scorecardSummaryVisible: boolean
   assignments: CricketRoleAssignments
 }
 
@@ -156,8 +242,11 @@ export function resetCricketBallToBowler(style?: BowlingStyle, spinDir?: SpinDir
     cricketRuntime.fielders[idx].isRunning = false
     cricketRuntime.fielders[idx].diving = false
   })
-  cricketRuntime.aiBowlCooldownSec = 1.6
-  useCricketStore.setState({ lastOutcomeKind: 'none' })
+  cricketRuntime.aiBowlCooldownSec = 1.55
+  cricketRuntime.aiBowlTotalSec = 1.55
+  cricketRuntime.aiBowlRequested = false
+  cricketRuntime.aiBowlerWaiting = false
+  useCricketStore.setState({ lastOutcomeKind: 'none', vrWaitingForBowlTrigger: false })
   cricketRuntime.onCricketBallSend?.(fresh)
 }
 
@@ -182,6 +271,18 @@ export interface CricketStoreState {
   recentBalls: string[]
   eventBanner: string | null
   lastOutcomeKind: CricketOutcomeKind
+  lastDeliverySpeedKmh: number
+  lastDeliverySpinKind: CricketSpinKind
+  lastDeliverySpinRpm: number
+  lastDropPoint: [number, number] | null
+  lastPitchLengthLabel: string
+  livePalmSpinHint: CricketSpinKind | null
+  vrWaitingForBowlTrigger: boolean
+  currentInningsLog: InningsBallEvent[]
+  firstInningsSummary: InningsSummarySnapshot | null
+  secondInningsSummary: InningsSummarySnapshot | null
+  matchResultBanner: string | null
+  scorecardSummaryVisible: boolean
   bowlerCharge: number
   bowlerCatchActive: boolean
   keeperCatchActive: boolean
@@ -203,6 +304,16 @@ export interface CricketStoreState {
   setBatSwingPulse: (pulse: number) => void
   setPitchTarget: (x: number, z: number) => void
   setEventBanner: (banner: string | null) => void
+  setLivePalmSpinHint: (hint: CricketSpinKind | null) => void
+  setVrWaitingForBowlTrigger: (waiting: boolean) => void
+  setScorecardSummaryVisible: (visible: boolean) => void
+  setDeliveryTelemetry: (opts: {
+    speedKmh: number
+    spinKind: CricketSpinKind
+    spinRpm: number
+    dropPoint: [number, number] | null
+    pitchLengthLabel: string
+  }) => void
   recordDeliveryOutcome: (opts: {
     runsScored: number
     isWicket: boolean
@@ -241,6 +352,18 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
   recentBalls: [],
   eventBanner: null,
   lastOutcomeKind: 'none',
+  lastDeliverySpeedKmh: 0,
+  lastDeliverySpinKind: 'fast',
+  lastDeliverySpinRpm: 0,
+  lastDropPoint: null,
+  lastPitchLengthLabel: '',
+  livePalmSpinHint: null,
+  vrWaitingForBowlTrigger: false,
+  currentInningsLog: [],
+  firstInningsSummary: null,
+  secondInningsSummary: null,
+  matchResultBanner: null,
+  scorecardSummaryVisible: false,
   bowlerCharge: 0,
   bowlerCatchActive: false,
   keeperCatchActive: false,
@@ -248,7 +371,22 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
   pitchTarget: [0.05, 5.2],
 
   setFormat: (format) => {
-    set({ format, runs: 0, wickets: 0, legalBalls: 0, inningsOver: false, recentBalls: [], targetScore: null, inningsNumber: 1, eventBanner: `${format.toUpperCase()} MATCH STARTED` })
+    set({
+      format,
+      runs: 0,
+      wickets: 0,
+      legalBalls: 0,
+      inningsOver: false,
+      recentBalls: [],
+      targetScore: null,
+      inningsNumber: 1,
+      currentInningsLog: [],
+      firstInningsSummary: null,
+      secondInningsSummary: null,
+      matchResultBanner: null,
+      scorecardSummaryVisible: false,
+      eventBanner: `${format.toUpperCase()} MATCH STARTED`,
+    })
     resetCricketBallToBowler()
   },
 
@@ -391,6 +529,25 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       ],
     }),
   setEventBanner: (eventBanner) => set({ eventBanner }),
+  setLivePalmSpinHint: (livePalmSpinHint) => {
+    if (get().livePalmSpinHint !== livePalmSpinHint) {
+      set({ livePalmSpinHint })
+    }
+  },
+  setVrWaitingForBowlTrigger: (vrWaitingForBowlTrigger) => {
+    if (get().vrWaitingForBowlTrigger !== vrWaitingForBowlTrigger) {
+      set({ vrWaitingForBowlTrigger })
+    }
+  },
+  setScorecardSummaryVisible: (scorecardSummaryVisible) => set({ scorecardSummaryVisible }),
+  setDeliveryTelemetry: ({ speedKmh, spinKind, spinRpm, dropPoint, pitchLengthLabel }) =>
+    set({
+      lastDeliverySpeedKmh: speedKmh,
+      lastDeliverySpinKind: spinKind,
+      lastDeliverySpinRpm: spinRpm,
+      lastDropPoint: dropPoint,
+      lastPitchLengthLabel: pitchLengthLabel,
+    }),
 
   recordDeliveryOutcome: ({ runsScored, isWicket, isLegalBall, label, banner }) => {
     const st = get()
@@ -423,6 +580,53 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
             ? 'runs'
             : 'dot'
 
+    const ballEvent: InningsBallEvent = {
+      ballNum: nextBalls,
+      overText: `${Math.floor(Math.max(0, nextBalls - (isLegalBall ? 1 : 0)) / 6)}.${(Math.max(0, nextBalls - (isLegalBall ? 1 : 0)) % 6) + 1}`,
+      label,
+      runs: runsScored,
+      isWicket,
+      isWide: !isLegalBall,
+      speedKmh: st.lastDeliverySpeedKmh,
+      spinKind: st.lastDeliverySpinKind,
+      spinRpm: st.lastDeliverySpinRpm,
+      pitchLength: st.lastPitchLengthLabel,
+    }
+    const nextLog = [...st.currentInningsLog, ballEvent]
+
+    let nextFirstSummary = st.firstInningsSummary
+    let nextSecondSummary = st.secondInningsSummary
+    let nextMatchResult = st.matchResultBanner
+
+    if (inningsDone) {
+      const snap = buildInningsSummary({
+        inningsNumber: st.inningsNumber,
+        batterId: st.assignments.batter,
+        bowlerId: st.assignments.bowler,
+        runs: nextRuns,
+        wickets: nextWickets,
+        legalBalls: nextBalls,
+        ballLog: nextLog,
+      })
+      if (st.inningsNumber === 1) {
+        nextFirstSummary = snap
+      } else {
+        nextSecondSummary = snap
+        if (st.targetScore !== null) {
+          if (chasedTarget) {
+            const wktsLeft = Math.max(1, maxWickets - nextWickets)
+            nextMatchResult = `2ND INNINGS WON BY ${wktsLeft} WICKET${wktsLeft > 1 ? 'S' : ''}!`
+          } else if (nextRuns === st.targetScore - 1) {
+            nextMatchResult = `MATCH TIED! (${nextRuns} - ${nextRuns})`
+          } else {
+            const runMargin = st.targetScore - 1 - nextRuns
+            nextMatchResult = `1ST INNINGS WON BY ${runMargin} RUN${runMargin > 1 ? 'S' : ''}!`
+          }
+          finalBanner = nextMatchResult
+        }
+      }
+    }
+
     set({
       runs: nextRuns,
       wickets: nextWickets,
@@ -431,6 +635,11 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       recentBalls: [...st.recentBalls.slice(-11), label],
       eventBanner: finalBanner,
       lastOutcomeKind: outcomeKind,
+      currentInningsLog: nextLog,
+      firstInningsSummary: nextFirstSummary,
+      secondInningsSummary: nextSecondSummary,
+      matchResultBanner: nextMatchResult,
+      scorecardSummaryVisible: inningsDone ? true : st.scorecardSummaryVisible,
     })
   },
 
@@ -445,6 +654,10 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       legalBalls: 0,
       inningsOver: false,
       recentBalls: [],
+      currentInningsLog: [],
+      secondInningsSummary: null,
+      matchResultBanner: null,
+      scorecardSummaryVisible: false,
       eventBanner: `2ND INNINGS: CHASE ${target} RUNS!`,
     })
     get().rotateCricketRoles(localPeerId, peerIds)
@@ -460,6 +673,11 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       inningsNumber: 1,
       inningsOver: false,
       recentBalls: [],
+      currentInningsLog: [],
+      firstInningsSummary: null,
+      secondInningsSummary: null,
+      matchResultBanner: null,
+      scorecardSummaryVisible: false,
       eventBanner: 'NEW MATCH READY!',
     })
     resetCricketBallToBowler(st.bowlingStyle, st.spinDir)
@@ -487,6 +705,16 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       recentBalls: payload.recentBalls,
       eventBanner: payload.eventBanner,
       lastOutcomeKind: payload.lastOutcomeKind ?? 'none',
+      lastDeliverySpeedKmh: payload.lastDeliverySpeedKmh ?? get().lastDeliverySpeedKmh,
+      lastDeliverySpinKind: payload.lastDeliverySpinKind ?? get().lastDeliverySpinKind,
+      lastDeliverySpinRpm: payload.lastDeliverySpinRpm ?? get().lastDeliverySpinRpm,
+      lastDropPoint: payload.lastDropPoint ?? get().lastDropPoint,
+      lastPitchLengthLabel: payload.lastPitchLengthLabel ?? get().lastPitchLengthLabel,
+      currentInningsLog: payload.currentInningsLog ?? get().currentInningsLog,
+      firstInningsSummary: payload.firstInningsSummary ?? null,
+      secondInningsSummary: payload.secondInningsSummary ?? null,
+      matchResultBanner: payload.matchResultBanner ?? null,
+      scorecardSummaryVisible: payload.scorecardSummaryVisible ?? payload.inningsOver,
       assignments: payload.assignments,
       localCricketRole: localRole,
       aiBatterEnabled: payload.assignments.batter === 'ai',
@@ -512,6 +740,16 @@ export const useCricketStore = create<CricketStoreState>((set, get) => ({
       recentBalls: st.recentBalls,
       eventBanner: st.eventBanner,
       lastOutcomeKind: st.lastOutcomeKind,
+      lastDeliverySpeedKmh: st.lastDeliverySpeedKmh,
+      lastDeliverySpinKind: st.lastDeliverySpinKind,
+      lastDeliverySpinRpm: st.lastDeliverySpinRpm,
+      lastDropPoint: st.lastDropPoint,
+      lastPitchLengthLabel: st.lastPitchLengthLabel,
+      currentInningsLog: st.currentInningsLog,
+      firstInningsSummary: st.firstInningsSummary,
+      secondInningsSummary: st.secondInningsSummary,
+      matchResultBanner: st.matchResultBanner,
+      scorecardSummaryVisible: st.scorecardSummaryVisible,
       assignments: st.assignments,
     }
   },

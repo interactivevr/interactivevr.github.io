@@ -4,6 +4,8 @@ import { voiceAudio } from '../net/voiceAudio'
 import { useGameStore } from '../store/useGameStore'
 import { useFullscreen } from '../ui/useFullscreen'
 import { xrStore } from '../xr/xrStore'
+import { formatSpinKindLabel } from './bowlingMechanics'
+import { DesktopScorecardSummaryModal } from './CricketScorecardSummary'
 import { getMaxBallsForFormat, getMaxWicketsForFormat } from './types'
 import { resetCricketBallToBowler, useCricketStore } from './useCricketStore'
 
@@ -33,6 +35,11 @@ export function CricketHUD() {
   const inningsOver = useCricketStore((s) => s.inningsOver)
   const recentBalls = useCricketStore((s) => s.recentBalls)
   const eventBanner = useCricketStore((s) => s.eventBanner)
+  const lastDeliverySpeedKmh = useCricketStore((s) => s.lastDeliverySpeedKmh)
+  const lastDeliverySpinKind = useCricketStore((s) => s.lastDeliverySpinKind)
+  const lastDeliverySpinRpm = useCricketStore((s) => s.lastDeliverySpinRpm)
+  const lastPitchLengthLabel = useCricketStore((s) => s.lastPitchLengthLabel)
+  const scorecardVisible = useCricketStore((s) => s.scorecardSummaryVisible)
   const bowlerCharge = useCricketStore((s) => s.bowlerCharge)
   const bowlerCatchActive = useCricketStore((s) => s.bowlerCatchActive)
   const keeperCatchActive = useCricketStore((s) => s.keeperCatchActive)
@@ -105,6 +112,15 @@ export function CricketHUD() {
               {localRole.toUpperCase()}
             </span>
           </div>
+          {lastDeliverySpeedKmh > 0 && (
+            <div className="hud-stat">
+              <span className="hud-stat-label">Last Ball</span>
+              <span className="hud-stat-val" style={{ color: '#facc15', fontSize: '0.88rem' }}>
+                {lastDeliverySpeedKmh} km/h • {formatSpinKindLabel(lastDeliverySpinKind)}
+                {lastDeliverySpinRpm > 0 ? ` (${lastDeliverySpinRpm} RPM)` : ''} • {lastPitchLengthLabel}
+              </span>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
             {recentBalls.map((b, i) => (
               <span
@@ -206,20 +222,29 @@ export function CricketHUD() {
           </button>
 
           {inningsOver ? (
-            <button
-              type="button"
-              className="hud-btn active"
-              onClick={() => {
-                if (inningsNumber === 1) {
-                  useCricketStore.getState().startSecondInnings(localPeerId, peerIds)
-                } else {
-                  useCricketStore.getState().resetMatch()
-                }
-                sync()
-              }}
-            >
-              {inningsNumber === 1 ? 'Chase Target (2nd Inn)' : 'New Match'}
-            </button>
+            <>
+              <button
+                type="button"
+                className="hud-btn active"
+                onClick={() => {
+                  if (inningsNumber === 1) {
+                    useCricketStore.getState().startSecondInnings(localPeerId, peerIds)
+                  } else {
+                    useCricketStore.getState().resetMatch()
+                  }
+                  sync()
+                }}
+              >
+                {inningsNumber === 1 ? 'Chase Target (2nd Inn)' : 'New Match'}
+              </button>
+              <button
+                type="button"
+                className="hud-btn"
+                onClick={() => useCricketStore.getState().setScorecardSummaryVisible(!scorecardVisible)}
+              >
+                {scorecardVisible ? 'Hide Scorecard' : 'Scorecard'}
+              </button>
+            </>
           ) : (
             <button
               type="button"
@@ -329,6 +354,8 @@ export function CricketHUD() {
               ? 'Bowler: Aim yellow ring on pitch • Hold Left-Click to Bowl • Hold Right-Click/Space: Caught & Bowled'
               : 'Wicketkeeper: Hold Right-Click / Space / E to catch behind stumps!'}
       </div>
+
+      <DesktopScorecardSummaryModal />
     </div>
   )
 }

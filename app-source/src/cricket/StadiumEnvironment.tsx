@@ -1,6 +1,7 @@
 import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
+import { formatSpinKindLabel } from './bowlingMechanics'
 import { stepStumpsAndBails } from './cricketPhysics'
 import {
   BATTING_CREASE_Z,
@@ -134,10 +135,20 @@ function BlackWhiteScoreboard() {
   const inningsNumber = useCricketStore((s) => s.inningsNumber)
   const recentBalls = useCricketStore((s) => s.recentBalls)
   const eventBanner = useCricketStore((s) => s.eventBanner)
+  const lastDeliverySpeedKmh = useCricketStore((s) => s.lastDeliverySpeedKmh)
+  const lastDeliverySpinKind = useCricketStore((s) => s.lastDeliverySpinKind)
+  const lastDeliverySpinRpm = useCricketStore((s) => s.lastDeliverySpinRpm)
+  const lastDropPoint = useCricketStore((s) => s.lastDropPoint)
+  const lastPitchLengthLabel = useCricketStore((s) => s.lastPitchLengthLabel)
 
   const oversStr = `${Math.floor(legalBalls / 6)}.${legalBalls % 6}`
   const maxOversStr = format === '1-over' ? '1.0' : '10.0'
   const runRate = legalBalls > 0 ? ((runs / legalBalls) * 6).toFixed(2) : '0.00'
+
+  const deliveryReadout =
+    lastDeliverySpeedKmh > 0
+      ? `BOWL: ${lastDeliverySpeedKmh} KM/H | ${formatSpinKindLabel(lastDeliverySpinKind)}${lastDeliverySpinRpm > 0 ? ` (${lastDeliverySpinRpm} RPM)` : ''} | DROP: ${lastPitchLengthLabel}${lastDropPoint ? ` (${lastDropPoint[1].toFixed(1)}m)` : ''}`
+      : eventBanner || 'LIVE MATCH'
 
   const boardTex = useMemo(() => {
     const canvas = document.createElement('canvas')
@@ -193,12 +204,14 @@ function BlackWhiteScoreboard() {
       305
     )
 
-    // Bottom Strip: THIS OVER & STATUS
+    // Bottom Strip: THIS OVER, SPEED/SPIN/DROP TELEMETRY & STATUS
     const ballsText = recentBalls.slice(-6).join('  ') || 'READY TO PLAY'
-    ctx.font = 'bold 30px "Courier New", monospace'
-    ctx.fillText(`RECENT: [ ${ballsText} ]`, 512, 386)
-    ctx.font = 'bold 34px Arial, sans-serif'
-    ctx.fillText(eventBanner || 'LIVE MATCH', 512, 448)
+    ctx.font = 'bold 28px "Courier New", monospace'
+    ctx.fillText(`RECENT: [ ${ballsText} ]`, 512, 372)
+    ctx.font = 'bold 24px "Courier New", monospace'
+    ctx.fillText(deliveryReadout, 512, 418)
+    ctx.font = 'bold 30px Arial, sans-serif'
+    ctx.fillText(eventBanner || 'LIVE MATCH', 512, 464)
 
     const tex = new THREE.CanvasTexture(canvas)
     tex.colorSpace = THREE.SRGBColorSpace
@@ -217,6 +230,7 @@ function BlackWhiteScoreboard() {
     inningsNumber,
     recentBalls,
     eventBanner,
+    deliveryReadout,
   ])
 
   useEffect(() => () => boardTex.dispose(), [boardTex])

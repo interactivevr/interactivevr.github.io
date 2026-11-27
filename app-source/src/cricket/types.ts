@@ -6,6 +6,8 @@ export type BowlingStyle = 'fast' | 'spin'
 
 export type SpinDirection = 'off' | 'leg'
 
+export type CricketSpinKind = 'fast' | 'legbreak' | 'offbreak' | 'googly' | 'no-spin'
+
 export type BatterStance = 'right' | 'left'
 
 export type CricketRole = 'batter' | 'bowler' | 'wicketkeeper'
@@ -21,6 +23,11 @@ export interface CricketBallNetState {
   spin: [number, number, number]
   bowlingStyle: BowlingStyle
   spinDir: SpinDirection
+  spinKind?: CricketSpinKind
+  spinRpm?: number
+  releaseSpeedMps?: number
+  predictedDropPos?: [number, number] | null
+  pitchLengthLabel?: string
   bouncedOnPitch: boolean
   bouncedAfterHit: boolean
   hitByBat: boolean

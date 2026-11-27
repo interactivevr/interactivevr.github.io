@@ -7,6 +7,7 @@ import { voiceAudio } from '../net/voiceAudio'
 import { segmentSphereIntersects } from '../physics/ballPhysics'
 import { getAthleteProfile } from '../scene/HumanFace'
 import { runtimeState, useGameStore } from '../store/useGameStore'
+import { applyBowledDeliveryToBall, predictPitchDropPoint } from './bowlingMechanics'
 import { computeDeliveryVelocity } from './cricketPhysics'
 import { CricketBatMesh, CricketGloveMesh } from './PlayerGear'
 import {
@@ -178,21 +179,27 @@ export function CricketDesktopRig() {
               st.spinDir,
               power
             )
-            ball.phase = 'bowled'
-            ball.ownerId = useGameStore.getState().localPeerId || 'local'
-            ball.pos = [...releasePos]
-            ball.prevPos = [...releasePos]
-            ball.vel = vel
-            ball.spin = spin
-            ball.bowlingStyle = st.bowlingStyle
-            ball.spinDir = st.spinDir
-            ball.bouncedOnPitch = false
-            ball.bouncedAfterHit = false
-            ball.hitByBat = false
-            ball.edgeContact = false
-            ball.epoch += 1
-            ball.timestamp = Date.now()
-            playThrowSfx(Math.hypot(vel[0], vel[1], vel[2]))
+            const spinKind =
+              st.bowlingStyle === 'fast'
+                ? 'fast'
+                : st.spinDir === 'off'
+                  ? 'offbreak'
+                  : 'legbreak'
+            const drop = predictPitchDropPoint(releasePos, vel, spin, st.bowlingStyle, spinKind)
+            const spinRpm = st.bowlingStyle === 'spin' ? Math.round(1150 + power * 950) : 0
+            const spd = applyBowledDeliveryToBall(ball, {
+              ownerId: useGameStore.getState().localPeerId || 'local',
+              releasePos,
+              vel,
+              spin,
+              bowlingStyle: st.bowlingStyle,
+              spinDir: st.spinDir,
+              spinKind,
+              spinRpm,
+              dropPoint: drop.dropPoint,
+              pitchLengthLabel: drop.lengthLabel,
+            })
+            playThrowSfx(spd)
             cricketRuntime.onCricketBallSend?.(ball)
           }
         }

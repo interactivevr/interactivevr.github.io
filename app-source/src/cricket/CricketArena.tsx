@@ -8,8 +8,10 @@ import { TextLabel } from '../scene/TextLabel'
 import { useGameStore } from '../store/useGameStore'
 import { xrStore } from '../xr/xrStore'
 import { CelebrationEffects } from './CelebrationEffects'
+import { formatSpinKindLabel } from './bowlingMechanics'
 import { CricketAvatars } from './CricketAvatars'
 import { CricketDesktopRig } from './CricketDesktopRig'
+import { VRScorecardSummary } from './CricketScorecardSummary'
 import { CricketVRRig } from './CricketVRRig'
 import { stepCricketAI } from './cricketAI'
 import { checkBatHitBall, stepCricketBallPhysics } from './cricketPhysics'
@@ -22,6 +24,7 @@ const TRAIL_COUNT = 10
 function CricketBallAndSim() {
   const ballGroupRef = useRef<THREE.Group>(null)
   const shadowRef = useRef<THREE.Mesh>(null)
+  const dropMarkerRef = useRef<THREE.Group>(null)
   const trailRefs = useRef<Array<THREE.Mesh | null>>([])
   const trailHistory = useMemo<Array<[number, number, number]>>(
     () => Array.from({ length: TRAIL_COUNT }, () => [0, -10, 0] as [number, number, number]),
@@ -139,6 +142,21 @@ function CricketBallAndSim() {
       shadowRef.current.scale.setScalar(s)
     }
 
+    if (dropMarkerRef.current) {
+      const showDrop =
+        ball.phase === 'bowled' && !ball.bouncedOnPitch && Boolean(ball.predictedDropPos)
+      dropMarkerRef.current.visible = showDrop
+      if (showDrop && ball.predictedDropPos) {
+        dropMarkerRef.current.position.set(
+          ball.predictedDropPos[0],
+          0.028,
+          ball.predictedDropPos[1]
+        )
+        const pulse = 1 + Math.sin(performance.now() * 0.012) * 0.12
+        dropMarkerRef.current.scale.setScalar(pulse)
+      }
+    }
+
     const isMoving = ball.phase === 'bowled' || ball.phase === 'hit'
     if (isMoving) {
       trailHistory.pop()
@@ -176,6 +194,18 @@ function CricketBallAndSim() {
         <circleGeometry args={[CRICKET_BALL_RADIUS * 1.4, 16]} />
         <meshBasicMaterial color="#000000" transparent opacity={0.42} depthWrite={false} />
       </mesh>
+
+      {/* Calculated Pitch Drop Spot Ring (shown while delivery is in flight before bounce) */}
+      <group ref={dropMarkerRef} visible={false}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.14, 0.21, 24]} />
+          <meshBasicMaterial color="#facc15" transparent opacity={0.92} depthWrite={false} />
+        </mesh>
+        <mesh rotation={[-Math.PI / 2, 0, 0]}>
+          <circleGeometry args={[0.055, 16]} />
+          <meshBasicMaterial color="#ef4444" transparent opacity={0.95} depthWrite={false} />
+        </mesh>
+      </group>
 
       {Array.from({ length: TRAIL_COUNT }).map((_, i) => (
         <mesh
@@ -241,6 +271,7 @@ function VRButton({
 
 function InVRCricketPanel() {
   const inXR = useGameStore((s) => s.inXR)
+  const vrMenuVisible = useGameStore((s) => s.vrMenuVisible)
   const peers = useGameStore((s) => s.peers)
   const localPeerId = useGameStore((s) => s.localPeerId)
   const micEnabled = useGameStore((s) => s.micEnabled)
@@ -250,8 +281,17 @@ function InVRCricketPanel() {
   const pitchMode = useCricketStore((s) => s.pitchMode)
   const bowlingStyle = useCricketStore((s) => s.bowlingStyle)
   const batterStance = useCricketStore((s) => s.batterStance)
+  const inningsNumber = useCricketStore((s) => s.inningsNumber)
+  const inningsOver = useCricketStore((s) => s.inningsOver)
+  const runs = useCricketStore((s) => s.runs)
+  const scorecardVisible = useCricketStore((s) => s.scorecardSummaryVisible)
+  const livePalmSpinHint = useCricketStore((s) => s.livePalmSpinHint)
+  const lastDeliverySpeedKmh = useCricketStore((s) => s.lastDeliverySpeedKmh)
+  const lastDeliverySpinKind = useCricketStore((s) => s.lastDeliverySpinKind)
+  const lastDeliverySpinRpm = useCricketStore((s) => s.lastDeliverySpinRpm)
+  const lastPitchLengthLabel = useCricketStore((s) => s.lastPitchLengthLabel)
 
-  if (!inXR) return null
+  if (!inXR || !vrMenuVisible) return null
 
   const panelPos: [number, number, number] =
     localRole === 'bowler' ? [-3.4, 1.35, -9.8] : [-3.6, 1.35, 8.6]
@@ -261,14 +301,26 @@ function InVRCricketPanel() {
     p2pClient.broadcastCricketState()
   }
 
+  const telemetryLine =
+    livePalmSpinHint && localRole === 'bowler'
+      ? `PALM READ: ${formatSpinKindLabel(livePalmSpinHint)}`
+      : lastDeliverySpeedKmh > 0
+        ? `${lastDeliverySpeedKmh} KM/H • ${formatSpinKindLabel(lastDeliverySpinKind)}${lastDeliverySpinRpm > 0 ? ` ${lastDeliverySpinRpm}RPM` : ''} • ${lastPitchLengthLabel || 'PITCHED'}`
+        : bowlingStyle === 'spin'
+          ? 'PALM SPIN: LEGBREAK / OFFBREAK / GOOGLY / NO SPIN'
+          : 'FAST BOWL: OBSERVES THROW SPEED & DROP'
+
   return (
     <group position={panelPos} rotation={[0, panelRotY, 0]}>
-      <mesh>
-        <boxGeometry args={[2.6, 1.75, 0.08]} />
+      <mesh position={[0, -0.14, 0]}>
+        <boxGeometry args={[2.95, 2.38, 0.08]} />
         <meshStandardMaterial color="#0f172a" roughness={0.6} />
       </mesh>
-      <TextLabel position={[0, 0.68, 0.05]} fontSize={0.095} color="#38bdf8">
-        {`CRICKET • ROLE: ${localRole.toUpperCase()}`}
+      <TextLabel position={[0, 0.84, 0.05]} fontSize={0.095} color="#38bdf8">
+        {`MAIN MENU • ROLE: ${localRole.toUpperCase()} • [B] HIDE/SHOW`}
+      </TextLabel>
+      <TextLabel position={[0, 0.64, 0.05]} fontSize={0.065} color="#fde047">
+        {telemetryLine}
       </TextLabel>
       <VRButton
         position={[-0.62, 0.36, 0.04]}
@@ -326,18 +378,77 @@ function InVRCricketPanel() {
       />
       <VRButton
         position={[-0.62, -0.68, 0.04]}
-        label="NEXT BALL / RESET"
-        color="#475569"
-        onClick={() => resetCricketBallToBowler()}
+        label={
+          inningsOver
+            ? inningsNumber === 1
+              ? `CHASE ${runs + 1}`
+              : 'NEW MATCH'
+            : 'NEXT BALL / RESET'
+        }
+        color={inningsOver ? '#059669' : '#475569'}
+        onClick={() => {
+          if (inningsOver && inningsNumber === 1) {
+            useCricketStore.getState().startSecondInnings(localPeerId, Object.keys(peers))
+            sync()
+          } else if (inningsOver) {
+            useCricketStore.getState().resetMatch()
+            sync()
+          } else {
+            resetCricketBallToBowler()
+          }
+        }}
       />
       <VRButton
         position={[0.62, -0.68, 0.04]}
+        label={inningsOver ? (scorecardVisible ? 'HIDE SCORECARD' : 'SCORECARD') : 'HIDE MENU [B]'}
+        color="#1d4ed8"
+        onClick={() => {
+          if (inningsOver) {
+            useCricketStore.getState().setScorecardSummaryVisible(!scorecardVisible)
+          } else {
+            useGameStore.getState().toggleVrMenu()
+          }
+        }}
+      />
+      <VRButton
+        position={[-0.62, -1.02, 0.04]}
+        label="MAIN LOBBY"
+        color="#7c3aed"
+        onClick={() => {
+          void xrStore.getState().session?.end()
+          void p2pClient.disconnect()
+          useGameStore.getState().leaveRoomReset()
+        }}
+      />
+      <VRButton
+        position={[0.62, -1.02, 0.04]}
         label="EXIT VR"
         color="#b91c1c"
         onClick={() => {
           void xrStore.getState().session?.end()
         }}
       />
+    </group>
+  )
+}
+
+function VRControllerPromptBanner() {
+  const inXR = useGameStore((s) => s.inXR)
+  const localRole = useCricketStore((s) => s.localCricketRole)
+  const vrWaiting = useCricketStore((s) => s.vrWaitingForBowlTrigger)
+  const inningsOver = useCricketStore((s) => s.inningsOver)
+
+  if (!inXR || inningsOver || localRole !== 'batter' || !vrWaiting) return null
+
+  return (
+    <group position={[0, 1.05, 5.2]}>
+      <mesh>
+        <boxGeometry args={[2.15, 0.34, 0.04]} />
+        <meshStandardMaterial color="#0f172a" transparent opacity={0.85} />
+      </mesh>
+      <TextLabel position={[0, 0, 0.03]} fontSize={0.11} color="#fde047">
+        PRESS [A / X] TO BOWL
+      </TextLabel>
     </group>
   )
 }
@@ -352,7 +463,9 @@ export function CricketArena() {
       <CricketAvatars />
       <CelebrationEffects />
       {inXR ? <CricketVRRig /> : <CricketDesktopRig />}
+      <VRControllerPromptBanner />
       <InVRCricketPanel />
+      <VRScorecardSummary />
     </group>
   )
 }

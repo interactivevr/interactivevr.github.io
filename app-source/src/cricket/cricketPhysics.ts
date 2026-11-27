@@ -236,10 +236,11 @@ export function stepCricketBallPhysics(
     if (ball.bowlingStyle === 'fast') {
       // Fast bowler air swing
       ball.vel[0] += ball.spin[0] * 0.55 * cDt
-    } else {
-      // Spinner drift & dip
+    } else if (ball.spinKind !== 'no-spin') {
+      // Spinner drift & dip (stronger topspin dip for googly & high-RPM wrist spin)
       ball.vel[0] += ball.spin[0] * 0.28 * cDt
-      ball.vel[1] -= 0.75 * cDt
+      const dipAccel = 0.75 + Math.abs(ball.spin[1]) * 0.38
+      ball.vel[1] -= dipAccel * cDt
     }
   }
 
@@ -266,8 +267,14 @@ export function stepCricketBallPhysics(
 
         if (ball.phase === 'bowled' && !ball.bouncedOnPitch) {
           ball.bouncedOnPitch = true
-          // Apply sideways spin/seam break off the pitch!
-          ball.vel[0] += ball.spin[0] * turnFactor
+          // Apply sideways spin/seam break off the pitch (skipped on true No-Spin arm ball)
+          if (ball.spinKind !== 'no-spin') {
+            ball.vel[0] += ball.spin[0] * turnFactor
+          }
+          if (ball.spinKind === 'googly') {
+            // Googly kicks slightly steeper with extra bounce off the pitch
+            ball.vel[1] *= isWet ? 1.05 : 1.14
+          }
           if (isWet && ball.bowlingStyle === 'fast') {
             // Wet pitch severely penalizes fast bowlers by taking pace off the ball
             ball.vel[2] *= 0.78

@@ -1,5 +1,7 @@
 import { playBatHitSfx, playBoundaryCrowdSfx, playCricketCatchSfx } from '../audio/cricketSfx'
 import { segmentSphereIntersects } from '../physics/ballPhysics'
+import { useGameStore } from '../store/useGameStore'
+import { applyBowledDeliveryToBall, predictPitchDropPoint } from './bowlingMechanics'
 import { computeDeliveryVelocity } from './cricketPhysics'
 import {
   AI_FIELD_POSITIONS,
@@ -7,6 +9,7 @@ import {
   BATTING_STUMPS_Z,
   BOWLING_STUMPS_Z,
   CRICKET_BALL_RADIUS,
+  CricketSpinKind,
   WIDE_HALF_W,
 } from './types'
 import { cricketRuntime, resetCricketBallToBowler, useCricketStore } from './useCricketStore'
@@ -29,53 +32,98 @@ export function stepCricketAI(dt: number, localPeerId: string): void {
   // 1. AI Bowler athletic run-up & realistic overarm release
   if (st.assignments.bowler === 'ai') {
     if (ball.phase === 'ready') {
-      cricketRuntime.aiBowlCooldownSec -= dt
-      const progress = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / 1.55))
-      const runZ = BOWLING_STUMPS_Z - 5.2 + progress * 5.05 // smooth run-up from -15.26 to -10.2
-      cricketRuntime.aiBowlerPos = [0.34, 0, runZ]
+      const waitingForVRControllerTrigger =
+        useGameStore.getState().inXR &&
+        st.localCricketRole === 'batter' &&
+        cricketRuntime.vrControllerActive &&
+        !cricketRuntime.aiBowlRequested
 
-      // Keep ball in AI bowler's hand during run-up
-      if (progress < 0.85) {
-        ball.pos = [0.52, 1.15 + Math.sin(progress * Math.PI * 3) * 0.08, runZ]
+      if (waitingForVRControllerTrigger) {
+        cricketRuntime.aiBowlerWaiting = true
+        st.setVrWaitingForBowlTrigger(true)
+        cricketRuntime.aiBowlCooldownSec = cricketRuntime.aiBowlTotalSec
+        const waitZ = BOWLING_STUMPS_Z - 5.2
+        cricketRuntime.aiBowlerPos = [0.34, 0, waitZ]
+        ball.pos = [0.52, 1.15, waitZ]
+        ball.prevPos = [...ball.pos]
       } else {
-        // High overarm release gather point
-        const armP = (progress - 0.85) / 0.15
-        ball.pos = [0.46, 1.35 + armP * 0.72, runZ + 0.15]
-      }
-      ball.prevPos = [...ball.pos]
+        cricketRuntime.aiBowlerWaiting = false
+        st.setVrWaitingForBowlTrigger(false)
+        cricketRuntime.aiBowlCooldownSec -= dt
+        const totalRunupSec = Math.max(0.35, cricketRuntime.aiBowlTotalSec)
+        const progress = Math.max(0, Math.min(1, 1 - cricketRuntime.aiBowlCooldownSec / totalRunupSec))
+        const runZ = BOWLING_STUMPS_Z - 5.2 + progress * 5.05 // smooth run-up from -15.26 to -10.2
+        cricketRuntime.aiBowlerPos = [0.34, 0, runZ]
 
-      if (isAIAuthority && cricketRuntime.aiBowlCooldownSec <= 0) {
-        const style = st.bowlingStyle
-        const spinDir = Math.random() < 0.72 ? st.spinDir : st.spinDir === 'off' ? 'leg' : 'off'
-        const targetX = (Math.random() - 0.5) * 0.48
-        const targetZ =
-          style === 'fast'
-            ? 3.8 + Math.random() * 4.2 // good length to yorker
-            : 4.9 + Math.random() * 2.9 // flighted spinner length
-        const releasePos: [number, number, number] = [0.42, 2.04, BOWLING_STUMPS_Z + 0.15]
-        const { vel, spin } = computeDeliveryVelocity(
-          releasePos,
-          targetX,
-          targetZ,
-          style,
-          spinDir,
-          0.68 + Math.random() * 0.32
-        )
-        ball.phase = 'bowled'
-        ball.ownerId = null
-        ball.pos = [...releasePos]
-        ball.prevPos = [...releasePos]
-        ball.vel = vel
-        ball.spin = spin
-        ball.bowlingStyle = style
-        ball.spinDir = spinDir
-        ball.bouncedOnPitch = false
-        ball.bouncedAfterHit = false
-        ball.hitByBat = false
-        ball.edgeContact = false
-        ball.epoch += 1
-        ball.timestamp = Date.now()
-        cricketRuntime.onCricketBallSend?.(ball)
+        // Keep ball in AI bowler's hand during run-up
+        if (progress < 0.85) {
+          ball.pos = [0.52, 1.15 + Math.sin(progress * Math.PI * 3) * 0.08, runZ]
+        } else {
+          // High overarm release gather point
+          const armP = (progress - 0.85) / 0.15
+          ball.pos = [0.46, 1.35 + armP * 0.72, runZ + 0.15]
+        }
+        ball.prevPos = [...ball.pos]
+
+        if (isAIAuthority && cricketRuntime.aiBowlCooldownSec <= 0) {
+          const style = st.bowlingStyle
+          const aiRoll = Math.random()
+          let spinKind: CricketSpinKind = 'fast'
+          let spinDir = st.spinDir
+          if (style === 'spin') {
+            if (aiRoll < 0.35) {
+              spinKind = st.spinDir === 'off' ? 'offbreak' : 'legbreak'
+            } else if (aiRoll < 0.65) {
+              spinKind = st.spinDir === 'off' ? 'legbreak' : 'offbreak'
+              spinDir = spinKind === 'legbreak' ? 'leg' : 'off'
+            } else if (aiRoll < 0.85) {
+              spinKind = 'googly'
+              spinDir = 'off'
+            } else {
+              spinKind = 'no-spin'
+            }
+          }
+          const targetX = (Math.random() - 0.5) * 0.48
+          const targetZ =
+            style === 'fast'
+              ? 3.8 + Math.random() * 4.2 // good length to yorker
+              : 4.9 + Math.random() * 2.9 // flighted spinner length
+          const releasePos: [number, number, number] = [0.42, 2.04, BOWLING_STUMPS_Z + 0.15]
+          const power = 0.68 + Math.random() * 0.32
+          const computed = computeDeliveryVelocity(
+            releasePos,
+            targetX,
+            targetZ,
+            style,
+            spinDir,
+            power
+          )
+          const spin: [number, number, number] =
+            spinKind === 'no-spin'
+              ? [0, 0, 0]
+              : spinKind === 'googly'
+                ? [Math.abs(computed.spin[0]), 0.9, 0]
+                : computed.spin
+          const drop = predictPitchDropPoint(releasePos, computed.vel, spin, style, spinKind)
+          const spinRpm =
+            spinKind === 'no-spin' || style === 'fast'
+              ? 0
+              : Math.round(1050 + power * 1100)
+
+          applyBowledDeliveryToBall(ball, {
+            ownerId: null,
+            releasePos,
+            vel: computed.vel,
+            spin,
+            bowlingStyle: style,
+            spinDir,
+            spinKind,
+            spinRpm,
+            dropPoint: drop.dropPoint,
+            pitchLengthLabel: drop.lengthLabel,
+          })
+          cricketRuntime.onCricketBallSend?.(ball)
+        }
       }
     } else if (ball.phase === 'bowled') {
       // Follow-through momentum slightly down pitch

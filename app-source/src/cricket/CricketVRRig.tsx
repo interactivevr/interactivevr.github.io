@@ -13,12 +13,16 @@ import { playThrowSfx } from '../audio/sfx'
 import { voiceAudio } from '../net/voiceAudio'
 import { segmentSphereIntersects } from '../physics/ballPhysics'
 import { analyzeXRHandFrame, XR_HAND_JOINTS } from '../physics/handGesture'
-import { ThrowVelocityEstimator } from '../physics/throwEstimator'
 import { ArticulatedHand } from '../scene/ArticulatedHand'
 import { getAthleteProfile } from '../scene/HumanFace'
 import { runtimeState, useGameStore } from '../store/useGameStore'
 import { HandSide } from '../types/game'
-import { computeDeliveryVelocity } from './cricketPhysics'
+import { isXRControllerButtonPressed, pulseXRControllerHaptics } from '../xr/controllerButtons'
+import {
+  applyBowledDeliveryToBall,
+  BowlingActionTracker,
+  formatSpinKindLabel,
+} from './bowlingMechanics'
 import { CricketBatMesh, CricketGloveMesh } from './PlayerGear'
 import { CRICKET_BALL_RADIUS, getCricketSpawn, WIDE_HALF_W } from './types'
 import { cricketRuntime, useCricketStore } from './useCricketStore'
@@ -30,20 +34,6 @@ const _batNormal = new THREE.Vector3()
 const _prevBatCenter = new THREE.Vector3()
 const _currBatCenter = new THREE.Vector3()
 const _batTiltQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI * 0.35)
-
-function pulseHaptics(inputSource: XRInputSource | undefined, intensity: number, durationMs: number): void {
-  if (!inputSource?.gamepad) return
-  try {
-    const actuators = (inputSource.gamepad as Gamepad & {
-      hapticActuators?: Array<{ pulse?: (v: number, d: number) => Promise<boolean> }>
-    }).hapticActuators
-    if (actuators && typeof actuators[0]?.pulse === 'function') {
-      void actuators[0].pulse(intensity, durationMs)
-    }
-  } catch {
-    // ignore
-  }
-}
 
 export function CricketVRRig() {
   const originRef = useRef<THREE.Group>(null)
@@ -59,7 +49,6 @@ export function CricketVRRig() {
   const localRole = useCricketStore((s) => s.localCricketRole)
   const batterStance = useCricketStore((s) => s.batterStance)
   const bowlingStyle = useCricketStore((s) => s.bowlingStyle)
-  const spinDir = useCricketStore((s) => s.spinDir)
 
   const spawn = getCricketSpawn(localRole, batterStance)
 
@@ -68,14 +57,16 @@ export function CricketVRRig() {
   const leftHand = useXRInputSourceState('hand', 'left')
   const rightHand = useXRInputSourceState('hand', 'right')
 
-  const leftEstimator = useMemo(() => new ThrowVelocityEstimator(), [])
-  const rightEstimator = useMemo(() => new ThrowVelocityEstimator(), [])
+  const leftBowlTracker = useMemo(() => new BowlingActionTracker(), [])
+  const rightBowlTracker = useMemo(() => new BowlingActionTracker(), [])
   const leftPoseBuf = useMemo(() => new Float32Array(XR_HAND_JOINTS.length * 16), [])
   const rightPoseBuf = useMemo(() => new Float32Array(XR_HAND_JOINTS.length * 16), [])
 
   const grabStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const handSelectRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const holdingBallHandRef = useRef<HandSide | null>(null)
+  const prevLowerBtnRef = useRef(false)
+  const prevBButtonRef = useRef(false)
 
   const localProfile = useMemo(
     () => getAthleteProfile(localPeerId || playerName || 'local'),
@@ -85,6 +76,17 @@ export function CricketVRRig() {
   useEffect(() => {
     voiceAudio.ensureListener(camera)
   }, [camera])
+
+  // Keyboard 'B' fallback to toggle VR Main Menu during Meta Quest Emulator testing
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'KeyB' && useGameStore.getState().inXR) {
+        useGameStore.getState().toggleVrMenu()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   useXRControllerLocomotion(originRef, { speed: 2.5 }, { type: 'snap', degrees: 45 }, 'left')
 
@@ -138,7 +140,7 @@ export function CricketVRRig() {
     const readSide = (side: HandSide) => {
       const ctrl = side === 'left' ? leftController : rightController
       const hand = side === 'left' ? leftHand : rightHand
-      const estimator = side === 'left' ? leftEstimator : rightEstimator
+      const tracker = side === 'left' ? leftBowlTracker : rightBowlTracker
       const poseBuf = side === 'left' ? leftPoseBuf : rightPoseBuf
 
       const wasGrabbing = grabStateRef.current[side]
@@ -147,6 +149,7 @@ export function CricketVRRig() {
       let curls: [number, number, number, number, number] =
         side === 'left' ? lp.leftCurls : lp.rightCurls
       let isGrabbing = false
+      let isHandTracking = false
       let activeInput: XRInputSource | undefined
 
       if (ctrl?.object) {
@@ -155,7 +158,6 @@ export function CricketVRRig() {
         ctrl.object.getWorldQuaternion(_worldQuat)
         posArr = [_worldPos.x, _worldPos.y, _worldPos.z]
         quatArr = [_worldQuat.x, _worldQuat.y, _worldQuat.z, _worldQuat.w]
-        estimator.push(_worldPos.x, _worldPos.y, _worldPos.z, nowSec)
 
         const sq = ctrl.gamepad['xr-standard-squeeze']?.button ?? 0
         const tr = ctrl.gamepad['xr-standard-trigger']?.button ?? 0
@@ -167,8 +169,10 @@ export function CricketVRRig() {
           handSelectRef.current[side]
         const c = isGrabbing ? 0.9 : 0.1
         curls = [c * 0.8, c, c, c, c]
+        tracker.push(posArr, quatArr, curls, false, nowSec)
       } else if (hand?.inputSource.hand && frame && refSpace) {
         activeInput = hand.inputSource
+        isHandTracking = true
         const analysis = analyzeXRHandFrame(
           hand.inputSource.hand,
           frame,
@@ -183,7 +187,7 @@ export function CricketVRRig() {
           quatArr = analysis.palmWorldQuat
           curls = analysis.curls
           isGrabbing = analysis.isGrabbing
-          estimator.push(posArr[0], posArr[1], posArr[2], nowSec)
+          tracker.push(posArr, quatArr, curls, true, nowSec)
         }
       }
 
@@ -208,15 +212,55 @@ export function CricketVRRig() {
         }
       }
 
-      return { posArr, quatArr, isGrabbing, activeInput, estimator }
+      return { posArr, quatArr, isGrabbing, isHandTracking, activeInput, tracker }
     }
 
     const leftRes = readSide('left')
     const rightRes = readSide('right')
     lp.catchingActive = lp.leftGrabbing || lp.rightGrabbing
 
+    // Track whether VR Touch controllers are active
+    const usingControllers = Boolean(leftController?.object || rightController?.object)
+    cricketRuntime.vrControllerActive = usingControllers
+
+    // Pressing 'B' button on right controller toggles show/hide for the VR main menu
+    const bPressedNow = isXRControllerButtonPressed(rightController, 'b-button', 5)
+    if (bPressedNow && !prevBButtonRef.current) {
+      useGameStore.getState().toggleVrMenu()
+      pulseXRControllerHaptics(rightController?.inputSource, 0.25, 25)
+    }
+    prevBButtonRef.current = bPressedNow
+
+    // Pressing lower controller button (A on right, X on left) requests AI bowler to bowl in batter mode
+    const lowerRight = isXRControllerButtonPressed(rightController, 'a-button', 4)
+    const lowerLeft = isXRControllerButtonPressed(leftController, 'x-button', 4)
+    const lowerBtnNow = lowerRight || lowerLeft
+    const lowerBtnJustPressed = lowerBtnNow && !prevLowerBtnRef.current
+    prevLowerBtnRef.current = lowerBtnNow
+
     const crState = useCricketStore.getState()
     const ball = cricketRuntime.ball
+
+    if (
+      lowerBtnJustPressed &&
+      usingControllers &&
+      localRole === 'batter' &&
+      ball.phase === 'ready' &&
+      !crState.inningsOver &&
+      crState.assignments.bowler === 'ai' &&
+      !cricketRuntime.aiBowlRequested
+    ) {
+      cricketRuntime.aiBowlRequested = true
+      cricketRuntime.aiBowlerWaiting = false
+      cricketRuntime.aiBowlCooldownSec = 0.85
+      cricketRuntime.aiBowlTotalSec = 0.85
+      crState.setVrWaitingForBowlTrigger(false)
+      pulseXRControllerHaptics(
+        lowerRight ? rightController?.inputSource : leftController?.inputSource,
+        0.4,
+        35
+      )
+    }
 
     // 1. Batter Role: swept MRF Cricket Bat collision (no obstructive body mesh!)
     if (localRole === 'batter') {
@@ -265,67 +309,73 @@ export function CricketVRRig() {
       ]
       bat.faceNormal = [_batNormal.x, _batNormal.y, _batNormal.z]
       bat.active = true
+      crState.setLivePalmSpinHint(null)
       if (catchAuraRef.current) catchAuraRef.current.visible = false
       return
     }
 
     cricketRuntime.bat.active = false
+    if (ball.phase !== 'ready' || localRole !== 'bowler') {
+      crState.setLivePalmSpinHint(null)
+    }
 
-    // 2. Bowler Role: effortless grip + pitch-aim-assisted overarm delivery + Caught & Bowled!
+    // 2. Bowler Role: real palm-read spin + observed throwing speed + calculated pitch drop + Caught & Bowled!
     if (localRole === 'bowler' && !crState.inningsOver) {
       if (ball.phase === 'ready') {
+        // In hand-only mode: Right-Hand stance allows only right hand to bowl; Left-Hand stance allows only left hand
+        const requiredHandSide: HandSide = batterStance === 'left' ? 'left' : 'right'
         const heldSide = holdingBallHandRef.current
         if (heldSide === null) {
+          crState.setLivePalmSpinHint(null)
           ;(['right', 'left'] as HandSide[]).forEach((s) => {
             const res = s === 'left' ? leftRes : rightRes
+            if (res.isHandTracking && s !== requiredHandSide) return
             if (res.isGrabbing) {
               holdingBallHandRef.current = s
-              res.estimator.reset()
-              pulseHaptics(res.activeInput, 0.5, 45)
+              res.tracker.reset()
+              pulseXRControllerHaptics(res.activeInput, 0.5, 45)
             }
           })
         } else {
           const res = heldSide === 'left' ? leftRes : rightRes
-          if (res.isGrabbing) {
+          if (res.isHandTracking && heldSide !== requiredHandSide) {
+            holdingBallHandRef.current = null
+            crState.setLivePalmSpinHint(null)
+          } else if (res.isGrabbing) {
             ball.prevPos = [...ball.pos]
             ball.pos = [...res.posArr]
+            if (bowlingStyle === 'spin') {
+              const liveSpin = res.tracker.readPalmSpin(nowSec, bowlingStyle, heldSide, 2.2)
+              crState.setLivePalmSpinHint(liveSpin.spinKind)
+            } else {
+              crState.setLivePalmSpinHint('fast')
+            }
           } else {
-            // Compute real arm motion + map onto authentic 22-yard pitch corridor so every VR bowl hits the strip cleanly!
-            const rawVel = res.estimator.computeVelocity(nowSec, 1.35, 28)
-            const rawSpeed = Math.hypot(rawVel[0], rawVel[1], rawVel[2])
-            const power01 = Math.max(0.25, Math.min(1, rawSpeed / 14))
-            const forwardZ = Math.max(4.0, rawVel[2])
-            const aimX = Math.max(-0.85, Math.min(0.85, (rawVel[0] / forwardZ) * 10))
-            // Slightly downward release aims fuller (yorker), higher release pitches shorter
-            const elevFactor = Math.max(-0.35, Math.min(0.35, rawVel[1] / forwardZ))
-            const targetZ = Math.max(2.6, Math.min(8.3, 5.4 - elevFactor * 7.5))
-
-            const { vel, spin } = computeDeliveryVelocity(
-              res.posArr,
-              aimX,
-              targetZ,
+            const delivery = res.tracker.analyzeDelivery(nowSec, res.posArr, bowlingStyle, heldSide)
+            const releaseSpeed = applyBowledDeliveryToBall(ball, {
+              ownerId: localPeerId || 'local',
+              releasePos: res.posArr,
+              vel: delivery.vel,
+              spin: delivery.spin,
               bowlingStyle,
-              spinDir,
-              power01
+              spinDir: delivery.spinDir,
+              spinKind: delivery.spinKind,
+              spinRpm: delivery.spinRpm,
+              dropPoint: delivery.dropPoint,
+              pitchLengthLabel: delivery.pitchLengthLabel,
+            })
+
+            const spinDetail =
+              bowlingStyle === 'spin' && delivery.spinRpm > 0
+                ? `${formatSpinKindLabel(delivery.spinKind)} (${delivery.spinRpm} RPM)`
+                : formatSpinKindLabel(delivery.spinKind)
+            crState.setEventBanner(
+              `${delivery.releaseSpeedKmh} KM/H • ${spinDetail} • DROP: ${delivery.pitchLengthLabel}`
             )
 
-            ball.phase = 'bowled'
-            ball.ownerId = localPeerId || 'local'
-            ball.pos = [...res.posArr]
-            ball.prevPos = [...res.posArr]
-            ball.vel = vel
-            ball.spin = spin
-            ball.bowlingStyle = bowlingStyle
-            ball.spinDir = spinDir
-            ball.bouncedOnPitch = false
-            ball.bouncedAfterHit = false
-            ball.hitByBat = false
-            ball.edgeContact = false
-            ball.epoch += 1
-            ball.timestamp = Date.now()
             holdingBallHandRef.current = null
-            playThrowSfx(Math.hypot(vel[0], vel[1], vel[2]))
-            pulseHaptics(res.activeInput, 0.5, 50)
+            playThrowSfx(releaseSpeed)
+            pulseXRControllerHaptics(res.activeInput, 0.55, 55)
             cricketRuntime.onCricketBallSend?.(ball)
           }
         }
@@ -351,7 +401,7 @@ export function CricketVRRig() {
             ball.epoch += 1
             playCricketCatchSfx()
             playBoundaryCrowdSfx(true)
-            pulseHaptics(res.activeInput, 0.95, 95)
+            pulseXRControllerHaptics(res.activeInput, 0.95, 95)
             crState.recordDeliveryOutcome({
               runsScored: 0,
               isWicket: true,
@@ -397,7 +447,7 @@ export function CricketVRRig() {
             ball.vel = [0, 0, 0]
             ball.epoch += 1
             playCricketCatchSfx()
-            pulseHaptics(res.activeInput, 0.9, 85)
+            pulseXRControllerHaptics(res.activeInput, 0.9, 85)
 
             if (isCaughtBehind) {
               playBoundaryCrowdSfx(true)

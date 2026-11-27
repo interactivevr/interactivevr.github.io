@@ -15,6 +15,7 @@ import { analyzeXRHandFrame, XR_HAND_JOINTS } from '../physics/handGesture'
 import { ThrowVelocityEstimator } from '../physics/throwEstimator'
 import { runtimeState, useGameStore } from '../store/useGameStore'
 import { BALL_RADIUS, getSpawnForSlot, HandSide } from '../types/game'
+import { isXRControllerButtonPressed, pulseXRControllerHaptics } from '../xr/controllerButtons'
 import { ArticulatedHand } from './ArticulatedHand'
 
 const VR_CATCH_RADIUS = 0.28
@@ -24,20 +25,6 @@ const _worldPos = new THREE.Vector3()
 const _worldQuat = new THREE.Quaternion()
 const _leftRingPos = new THREE.Vector3()
 const _rightRingPos = new THREE.Vector3()
-
-function pulseHaptics(inputSource: XRInputSource | undefined, intensity: number, durationMs: number): void {
-  if (!inputSource?.gamepad) return
-  try {
-    const actuators = (inputSource.gamepad as Gamepad & {
-      hapticActuators?: Array<{ pulse?: (v: number, d: number) => Promise<boolean> }>
-    }).hapticActuators
-    if (actuators && typeof actuators[0]?.pulse === 'function') {
-      void actuators[0].pulse(intensity, durationMs)
-    }
-  } catch {
-    // Ignore on browsers without WebXR Gamepad hapticActuators
-  }
-}
 
 function VRSessionRig() {
   const originRef = useRef<THREE.Group>(null)
@@ -65,6 +52,7 @@ function VRSessionRig() {
   const grabStateRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const handSelectRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false })
   const lastThrowAtRef = useRef<{ left: number; right: number }>({ left: -10, right: -10 })
+  const prevBButtonRef = useRef(false)
   const heldByHandRef = useRef<{ left: number | null; right: number | null }>({
     left: null,
     right: null,
@@ -123,6 +111,13 @@ function VRSessionRig() {
     const nowSec = performance.now() / 1000
     const lp = runtimeState.localPose
     const refSpace = referenceSpace ?? state.gl.xr.getReferenceSpace() ?? undefined
+
+    const bPressed = isXRControllerButtonPressed(rightController, 'b-button', 5)
+    if (bPressed && !prevBButtonRef.current) {
+      useGameStore.getState().toggleVrMenu()
+      pulseXRControllerHaptics(rightController?.inputSource, 0.25, 25)
+    }
+    prevBButtonRef.current = bPressed
 
     // Sync head pose
     camera.getWorldPosition(_worldPos)
@@ -229,7 +224,7 @@ function VRSessionRig() {
             heldByHandRef.current[side] = null
             lastThrowAtRef.current[side] = nowSec
             estimator.reset()
-            pulseHaptics(activeInput, 0.45, 45)
+            pulseXRControllerHaptics(activeInput, 0.45, 45)
           }
         }
         return
@@ -260,7 +255,7 @@ function VRSessionRig() {
             if (claimBallLocally(ball.id, side)) {
               heldByHandRef.current[side] = ball.id
               estimator.reset()
-              pulseHaptics(activeInput, wasGrabbing ? 0.9 : 0.65, 85)
+              pulseXRControllerHaptics(activeInput, wasGrabbing ? 0.9 : 0.65, 85)
               break
             }
           }

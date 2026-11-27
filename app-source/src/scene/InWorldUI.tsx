@@ -116,6 +116,7 @@ function ScoreboardPanel({
 
 export function InWorldUI() {
   const inXR = useGameStore((s) => s.inXR)
+  const vrMenuVisible = useGameStore((s) => s.vrMenuVisible)
   const micEnabled = useGameStore((s) => s.micEnabled)
   const gameMode = useGameStore((s) => s.gameMode)
   const localRole = useGameStore((s) => s.localRole)
@@ -134,8 +135,8 @@ export function InWorldUI() {
       <ScoreboardPanel position={[0, 4.1, -8.3]} rotationY={0} />
       <ScoreboardPanel position={[0, 4.1, 8.3]} rotationY={Math.PI} />
 
-      {/* In-VR Diegetic Control Panel along side rail (clickable by XR laser pointer or pinch) */}
-      {inXR && (
+      {/* In-VR Diegetic Control Panel along side rail (clickable by XR laser pointer or pinch; B toggles visibility) */}
+      {inXR && vrMenuVisible && (
         <group position={[-4.5, 1.35, 0]} rotation={[0, Math.PI / 2, 0]}>
           <mesh>
             <boxGeometry args={[2.5, 1.4, 0.08]} />
