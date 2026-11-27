@@ -30,6 +30,10 @@ export type MaterialSfxAction =
   | 'pen_write'
   | 'tester_live'
   | 'tester_insulator'
+  | 'dart_hit'
+  | 'dart_bullseye'
+  | 'dart_miss'
+  | 'dart_win'
 
 /**
  * Plays subtle procedural material feedback for squeezing, folding, tearing, cutting, tools, or watch taps.
@@ -56,6 +60,61 @@ export function playMaterialActionSfx(kind: CraftMaterialKind, action: MaterialS
       osc.connect(gain).connect(ctx.destination)
       osc.start(t)
       osc.stop(t + 0.07)
+      return
+    }
+    if (action === 'dart_hit' || action === 'dart_bullseye') {
+      // Crisp sisal cork thud + celebratory tone on bullseye/treble
+      const thud = ctx.createOscillator()
+      const thudGain = ctx.createGain()
+      thud.type = 'triangle'
+      thud.frequency.setValueAtTime(145, t)
+      thud.frequency.exponentialRampToValueAtTime(52, t + 0.07)
+      thudGain.gain.setValueAtTime(0.18, t)
+      thudGain.gain.exponentialRampToValueAtTime(0.001, t + 0.08)
+      thud.connect(thudGain).connect(ctx.destination)
+      thud.start(t)
+      thud.stop(t + 0.085)
+
+      if (action === 'dart_bullseye') {
+        const chime = ctx.createOscillator()
+        const cGain = ctx.createGain()
+        chime.type = 'sine'
+        chime.frequency.setValueAtTime(880, t + 0.02)
+        chime.frequency.setValueAtTime(1320, t + 0.1)
+        cGain.gain.setValueAtTime(0.11, t + 0.02)
+        cGain.gain.exponentialRampToValueAtTime(0.001, t + 0.28)
+        chime.connect(cGain).connect(ctx.destination)
+        chime.start(t + 0.02)
+        chime.stop(t + 0.3)
+      }
+      return
+    }
+    if (action === 'dart_miss') {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(320, t)
+      osc.frequency.exponentialRampToValueAtTime(110, t + 0.12)
+      gain.gain.setValueAtTime(0.08, t)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.13)
+      osc.connect(gain).connect(ctx.destination)
+      osc.start(t)
+      osc.stop(t + 0.14)
+      return
+    }
+    if (action === 'dart_win') {
+      ;[523.25, 659.25, 783.99, 1046.5].forEach((freq, idx) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'triangle'
+        const st = t + idx * 0.09
+        osc.frequency.setValueAtTime(freq, st)
+        gain.gain.setValueAtTime(0.11, st)
+        gain.gain.exponentialRampToValueAtTime(0.001, st + 0.22)
+        osc.connect(gain).connect(ctx.destination)
+        osc.start(st)
+        osc.stop(st + 0.24)
+      })
       return
     }
     if (action === 'tester_live') {

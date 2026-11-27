@@ -6,12 +6,19 @@ import {
   useCricketStore,
 } from '../cricket/useCricketStore'
 import { applyQuantizedDeform } from '../myroom/craftEngine'
-import { CraftDeformNetPayload, CraftObjectNetState } from '../myroom/types'
 import {
+  CraftDeformNetPayload,
+  CraftObjectNetState,
+  DartStateNetPayload,
+  DartThrowNetPayload,
+} from '../myroom/types'
+import {
+  buildDartStateSyncPayload,
   deleteRuntimeCraftObject,
   myRoomRuntime,
   spawnRuntimeCraftObject,
   stripToNetState,
+  useMyRoomStore,
 } from '../myroom/useMyRoomStore'
 import { getOrCreateRemotePose, runtimeState, useGameStore } from '../store/useGameStore'
 import {
@@ -181,6 +188,8 @@ class P2PGameClient {
   private sendMyRoomObjFn: ((data: CraftObjectNetState, target?: string) => void) | null = null
   private sendMyRoomDeformFn: ((data: CraftDeformNetPayload) => void) | null = null
   private sendMyRoomDelFn: ((data: { id: string }) => void) | null = null
+  private sendMyRoomDartStateFn: ((data: DartStateNetPayload, target?: string) => void) | null = null
+  private sendMyRoomDartThrowFn: ((data: DartThrowNetPayload) => void) | null = null
   private poseInterval: number | null = null
   private localJoinedAt = Date.now()
 
@@ -227,6 +236,8 @@ class P2PGameClient {
     const mrObjAction = room.makeAction<CraftObjectNetState>('mrObj')
     const mrDeformAction = room.makeAction<CraftDeformNetPayload>('mrDef')
     const mrDelAction = room.makeAction<{ id: string }>('mrDel')
+    const mrDartStAction = room.makeAction<DartStateNetPayload>('mrDartSt')
+    const mrDartThAction = room.makeAction<DartThrowNetPayload>('mrDartTh')
     const clkPingAction = room.makeAction<ClockPingPayload>('clkP')
     const clkPongAction = room.makeAction<ClockPongPayload>('clkA')
 
@@ -269,6 +280,14 @@ class P2PGameClient {
       if (Object.keys(useGameStore.getState().peers).length === 0) return
       void mrDelAction.send(data).catch(() => {})
     }
+    this.sendMyRoomDartStateFn = (data, target) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void mrDartStAction.send(data, target ? { target } : undefined).catch(() => {})
+    }
+    this.sendMyRoomDartThrowFn = (data) => {
+      if (Object.keys(useGameStore.getState().peers).length === 0) return
+      void mrDartThAction.send(data).catch(() => {})
+    }
 
     myRoomRuntime.onCraftObjectSend = (obj, target) => {
       this.sendMyRoomObjFn?.(obj, target)
@@ -278,6 +297,12 @@ class P2PGameClient {
     }
     myRoomRuntime.onCraftRemoveSend = (id) => {
       this.sendMyRoomDelFn?.({ id })
+    }
+    myRoomRuntime.onDartStateSend = (dartSt, target) => {
+      this.sendMyRoomDartStateFn?.(dartSt, target)
+    }
+    myRoomRuntime.onDartThrowSend = (dartThrow) => {
+      this.sendMyRoomDartThrowFn?.(dartThrow)
     }
 
     cricketRuntime.onCricketBallSend = (ball) => {
@@ -508,6 +533,20 @@ class P2PGameClient {
       deleteRuntimeCraftObject(data.id, false)
     })
 
+    mrDartStAction.onMessage((incoming) => {
+      useMyRoomStore.getState().applyNetworkDartState(incoming, useGameStore.getState().localPeerId)
+    })
+
+    mrDartThAction.onMessage((incoming) => {
+      const peerCount = Object.keys(useGameStore.getState().peers).length
+      const hasOpp =
+        peerCount > 0 ||
+        (useMyRoomStore.getState().showAiOpponent && useMyRoomStore.getState().opponentMode !== 'peer')
+      useMyRoomStore
+        .getState()
+        .applyNetworkDartThrow(incoming, useGameStore.getState().localPeerId, hasOpp)
+    })
+
     clkPingAction.onMessage((data, { peerId }) => {
       void clkPongAction.send({ t0: data.t0, t1: Date.now() }, { target: peerId }).catch(() => {})
     })
@@ -552,6 +591,10 @@ class P2PGameClient {
           this.sendCricketBallFn?.(cricketRuntime.ball, peerId)
         } else if (st.activeGame === 'myroom') {
           myRoomRuntime.objects.forEach((o) => this.sendMyRoomObjFn?.(stripToNetState(o), peerId))
+          const dg = useMyRoomStore.getState().dartGame
+          if (dg.active) {
+            this.sendMyRoomDartStateFn?.(buildDartStateSyncPayload(dg), peerId)
+          }
         } else {
           runtimeState.balls.forEach((b) => this.sendBallFn?.(b, peerId))
         }
@@ -644,6 +687,8 @@ class P2PGameClient {
     myRoomRuntime.onCraftObjectSend = null
     myRoomRuntime.onCraftDeformSend = null
     myRoomRuntime.onCraftRemoveSend = null
+    myRoomRuntime.onDartStateSend = null
+    myRoomRuntime.onDartThrowSend = null
     this.sendHelloFn = null
     this.sendPoseFn = null
     this.sendBallFn = null
@@ -654,6 +699,8 @@ class P2PGameClient {
     this.sendMyRoomObjFn = null
     this.sendMyRoomDeformFn = null
     this.sendMyRoomDelFn = null
+    this.sendMyRoomDartStateFn = null
+    this.sendMyRoomDartThrowFn = null
 
     if (this.room) {
       try {

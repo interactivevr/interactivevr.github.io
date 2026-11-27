@@ -27,7 +27,7 @@ import {
 } from './craftEngine'
 import { computeRightToolWorldTransform } from './LeftWristSmartWatch'
 import { computeWorldObjectBox } from './roomPhysics'
-import { MATERIAL_PHYSICS } from './types'
+import { DARTS_PER_PLAYER, MATERIAL_PHYSICS } from './types'
 import {
   deleteRuntimeCraftObject,
   myRoomRuntime,
@@ -49,6 +49,12 @@ const _worldPos = new THREE.Vector3()
 const _worldQuat = new THREE.Quaternion()
 const _palmNormal = new THREE.Vector3()
 const _objQuat = new THREE.Quaternion()
+const _dartHeadQ = new THREE.Quaternion()
+const _dartFwd = new THREE.Vector3()
+const _dartRight = new THREE.Vector3()
+const _dartDir = new THREE.Vector3()
+const _dartAimQ = new THREE.Quaternion()
+const _dartZeroFwd = new THREE.Vector3(0, 0, -1)
 
 export function MyRoomARRig() {
   const originRef = useRef<THREE.Group>(null)
@@ -76,6 +82,7 @@ export function MyRoomARRig() {
     left: null,
     right: null,
   })
+  const heldDartHandRef = useRef<HandSide | null>(null)
   const companionHoldRef = useRef<{ left: CompanionHoldState; right: CompanionHoldState }>({
     left: null,
     right: null,
@@ -287,10 +294,92 @@ export function MyRoomARRig() {
       }
     }
 
-    const equippedRightTool = useMyRoomStore.getState().activeTool
+    const myRoomSt = useMyRoomStore.getState()
+    const equippedRightTool = myRoomSt.activeTool
+    const dg = myRoomSt.dartGame
+    const localThrowsCount = dg.throws.filter((t) => t.thrower === 'local').length
+    const hasLocalFlyingDart = myRoomRuntime.darts.flyingDarts.some(
+      (d) => d.thrower === 'local' && !d.settled
+    )
+    const isMyDartTurn =
+      dg.active &&
+      !dg.finished &&
+      (dg.turnOwnerId === myId || dg.turnOwnerId === 'local') &&
+      localThrowsCount < DARTS_PER_PLAYER &&
+      !hasLocalFlyingDart &&
+      nowSec - myRoomRuntime.darts.lastThrowAtSec > 0.42
 
-    // 1. Acquire / release grabs on left and right hands independently
+    if (isMyDartTurn) {
+      _dartHeadQ.set(lp.headQuat[0], lp.headQuat[1], lp.headQuat[2], lp.headQuat[3])
+      _dartFwd.set(0, 0, -1).applyQuaternion(_dartHeadQ).setY(0).normalize()
+      _dartRight.set(1, 0, 0).applyQuaternion(_dartHeadQ).setY(0).normalize()
+      const caddyPos: [number, number, number] = [
+        lp.headPos[0] + _dartFwd.x * 0.42 + _dartRight.x * 0.22,
+        Math.max(myRoomRuntime.floorY + 0.55, lp.headPos[1] - 0.16),
+        lp.headPos[2] + _dartFwd.z * 0.42 + _dartRight.z * 0.22,
+      ]
+      if (!myRoomRuntime.darts.readyDart) {
+        _dartDir
+          .set(
+            dg.boardPose.pos[0] - caddyPos[0],
+            dg.boardPose.pos[1] - caddyPos[1],
+            dg.boardPose.pos[2] - caddyPos[2]
+          )
+          .normalize()
+        _dartAimQ.setFromUnitVectors(_dartZeroFwd, _dartDir)
+        myRoomRuntime.darts.readyDart = {
+          id: `ready_dart_${dg.matchId}_${localThrowsCount}`,
+          thrower: 'local',
+          throwerId: myId,
+          throwIndex: localThrowsCount,
+          inFlight: false,
+          settled: false,
+          flightTimeSec: 0,
+          pos: caddyPos,
+          prevPos: [...caddyPos],
+          vel: [0, 0, 0],
+          quat: [_dartAimQ.x, _dartAimQ.y, _dartAimQ.z, _dartAimQ.w],
+        }
+      } else if (heldDartHandRef.current === null) {
+        myRoomRuntime.darts.readyDart.pos = caddyPos
+      }
+    } else if (heldDartHandRef.current === null) {
+      myRoomRuntime.darts.readyDart = null
+    }
+
+    // 1. Acquire / release grabs on left and right hands independently (Darts first, then Crafts, then AI)
     const handleGrabLifecycle = (handRes: ReturnType<typeof readHand>) => {
+      if (heldDartHandRef.current === handRes.side) {
+        const rd = myRoomRuntime.darts.readyDart
+        if (!rd) {
+          heldDartHandRef.current = null
+          return
+        }
+        if (handRes.isGrabbing) {
+          rd.pos = [...handRes.posArr]
+          rd.quat = [...handRes.quatArr]
+        } else {
+          const throwVel = handRes.estimator.computeVelocity(nowSec, 1.5, 12.0)
+          const speed = Math.hypot(throwVel[0], throwVel[1], throwVel[2])
+          heldDartHandRef.current = null
+          handRes.estimator.reset()
+          if (speed > 1.3) {
+            rd.inFlight = true
+            rd.settled = false
+            rd.flightTimeSec = 0
+            rd.prevPos = [...handRes.posArr]
+            rd.pos = [...handRes.posArr]
+            rd.vel = [...throwVel]
+            myRoomRuntime.darts.flyingDarts.push(rd)
+            myRoomRuntime.darts.readyDart = null
+            myRoomRuntime.darts.lastThrowAtSec = nowSec
+            playThrowSfx(speed)
+            pulseXRControllerHaptics(handRes.activeInput, 0.55, 40)
+          }
+        }
+        return
+      }
+
       const heldId = heldByHandRef.current[handRes.side]
       if (heldId !== null) {
         const obj = myRoomRuntime.objects.get(heldId)
@@ -317,6 +406,22 @@ export function MyRoomARRig() {
           handRes.estimator.reset()
         }
       } else if (handRes.isGrabbing && !(handRes.side === 'right' && equippedRightTool !== 'none')) {
+        // Pick up hovering Ready Dart if your Dart Turn is active!
+        const rd = myRoomRuntime.darts.readyDart
+        if (rd && heldDartHandRef.current === null && isMyDartTurn) {
+          const dDart = Math.hypot(
+            rd.pos[0] - handRes.posArr[0],
+            rd.pos[1] - handRes.posArr[1],
+            rd.pos[2] - handRes.posArr[2]
+          )
+          if (dDart < 0.25) {
+            heldDartHandRef.current = handRes.side
+            handRes.estimator.reset()
+            pulseXRControllerHaptics(handRes.activeInput, 0.4, 28)
+            return
+          }
+        }
+
         // Check if grabbing a craft object first; if none in reach, check AI companion's hand or hair!
         let bestObj: RuntimeCraftObject | null = null
         let bestDist = Infinity
@@ -345,10 +450,11 @@ export function MyRoomARRig() {
           pulseXRControllerHaptics(handRes.activeInput, 0.4, 30)
           myRoomRuntime.onCraftObjectSend?.(stripToNetState(picked))
         } else if (
+          myRoomSt.showAiOpponent &&
           companionHoldRef.current[handRes.side] === null &&
           useGameStore.getState().peers &&
-          (useMyRoomStore.getState().opponentMode === 'computer' ||
-            (useMyRoomStore.getState().opponentMode === 'auto' &&
+          (myRoomSt.opponentMode === 'computer' ||
+            (myRoomSt.opponentMode === 'auto' &&
               Object.keys(useGameStore.getState().peers).length === 0))
         ) {
           const ai = myRoomRuntime.ai
@@ -471,7 +577,7 @@ export function MyRoomARRig() {
           }
 
           const aiXZDist = Math.hypot(ai.pos[0] - lp.headPos[0], ai.pos[2] - lp.headPos[2])
-          if (aiXZDist > 1.25) {
+          if (myRoomSt.showAiOpponent && aiXZDist > 1.25) {
             const toAiX = ai.pos[0] - lp.headPos[0]
             const toAiZ = ai.pos[2] - lp.headPos[2]
             const handAimAtAi = (toAiX * palmFromHeadX + toAiZ * palmFromHeadZ) / (aiXZDist * pLen)
@@ -484,7 +590,11 @@ export function MyRoomARRig() {
         }
       }
 
-      if (heldByHandRef.current[hRes.side] === null && !companionHoldRef.current[hRes.side]) {
+      if (
+        myRoomSt.showAiOpponent &&
+        heldByHandRef.current[hRes.side] === null &&
+        !companionHoldRef.current[hRes.side]
+      ) {
         const dHead = Math.hypot(
           hRes.posArr[0] - ai.headWorldPos[0],
           hRes.posArr[1] - ai.headWorldPos[1],

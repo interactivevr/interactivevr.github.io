@@ -227,3 +227,48 @@ export function getAllPaletteColors(): string[] {
 
 export const MAX_ROOM_CRAFT_OBJECTS = 26
 export const MAX_TEAR_GENERATION = 3
+
+export const DARTS_PER_PLAYER = 6
+export const DARTBOARD_RADIUS = 0.24
+
+export interface DartBoardPose {
+  pos: [number, number, number]
+  normal: [number, number, number]
+  yaw: number
+  mountedOnWall: boolean
+}
+
+export interface DartThrowRecord {
+  thrower: 'local' | 'opponent'
+  throwerId: string
+  score: number
+  label: string
+  localX: number
+  localY: number
+  stuck: boolean
+}
+
+export interface DartStateNetPayload {
+  active: boolean
+  matchId: number
+  turnOwnerId: string
+  boardPose: DartBoardPose
+  throws: DartThrowRecord[]
+  finished: boolean
+  winnerLabel: string | null
+  lastCallout: string
+  timestamp: number
+}
+
+export interface DartThrowNetPayload {
+  matchId: number
+  throwerId: string
+  throwIndex: number
+  startPos: [number, number, number]
+  vel: [number, number, number]
+  record: DartThrowRecord
+  nextTurnOwnerId: string
+  finished: boolean
+  winnerLabel: string | null
+  timestamp: number
+}

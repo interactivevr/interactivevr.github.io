@@ -9,6 +9,8 @@ import { runtimeState, useGameStore } from '../store/useGameStore'
 import { PeerInfo } from '../types/game'
 import { xrStore } from '../xr/xrStore'
 import { CraftObjectsLayer } from './CraftObjectMesh'
+import { DartArenaLayer } from './DartArenaLayer'
+import { computeAIDartThrowVelocity, findDartboardPlacement } from './dartEngine'
 import { LeftWristSmartWatch, RightHandActiveToolView } from './LeftWristSmartWatch'
 import { MyRoomARRig } from './MyRoomARRig'
 import { stepMyRoomAI } from './myroomAI'
@@ -198,6 +200,8 @@ function InARCraftStudioPanel() {
   const selectedColor = useMyRoomStore((s) => s.selectedColor)
   const showRoomMesh = useMyRoomStore((s) => s.showRoomMesh)
   const showSelfBody = useMyRoomStore((s) => s.showSelfBody)
+  const showAiOpponent = useMyRoomStore((s) => s.showAiOpponent)
+  const dartGame = useMyRoomStore((s) => s.dartGame)
   const opponentMode = useMyRoomStore((s) => s.opponentMode)
   const scannedCount = useMyRoomStore((s) => s.scannedSurfaceCount)
   const objectCount = useMyRoomStore((s) => s.objectCount)
@@ -273,34 +277,46 @@ function InARCraftStudioPanel() {
       )
   }
 
+  const getForwardBoardPose = () => {
+    camera.getWorldPosition(_rayOrigin)
+    camera.getWorldDirection(_rayDir)
+    return findDartboardPlacement(
+      [_rayOrigin.x, _rayOrigin.y, _rayOrigin.z],
+      [_rayDir.x, _rayDir.z],
+      myRoomRuntime.surfaces,
+      myRoomRuntime.floorY,
+      myRoomRuntime.roomBoundsXZ
+    )
+  }
+
   return (
     <group position={panelPoseRef.current.pos} rotation={[0, panelPoseRef.current.yaw, 0]}>
       <mesh>
-        <boxGeometry args={[1.04, 0.88, 0.025]} />
+        <boxGeometry args={[1.06, 1.02, 0.025]} />
         <meshStandardMaterial color="#0b1220" transparent opacity={0.92} roughness={0.5} />
       </mesh>
-      <TextLabel position={[0, 0.37, 0.018]} fontSize={0.032} color="#38bdf8">
+      <TextLabel position={[0, 0.44, 0.018]} fontSize={0.032} color="#38bdf8">
         {`MYROOM MR STUDIO  •  SURFACES: ${scannedCount}  •  OBJECTS: ${objectCount}  •  [B] HIDE`}
       </TextLabel>
-      <TextLabel position={[0, 0.31, 0.018]} fontSize={0.021} color="#fde047">
-        {statusHint || 'Pinch to Carry • Close Fist / Two Palms to Squeeze or Fold • Pull Apart to Tear'}
+      <TextLabel position={[0, 0.38, 0.018]} fontSize={0.021} color="#fde047">
+        {statusHint || 'Pinch to Carry • Fold Paper • Tap Watch Tools • Play 6 Darts!'}
       </TextLabel>
 
       {/* Row 1: Squeezeable / Foldable Craft Materials */}
       <ARStudioButton
-        position={[-0.31, 0.21, 0.016]}
+        position={[-0.31, 0.27, 0.016]}
         label="+ CLAY (0.7kg)"
         color="#c2410c"
         onClick={() => spawnInRoom('clay', 'sphere')}
       />
       <ARStudioButton
-        position={[0, 0.21, 0.016]}
+        position={[0, 0.27, 0.016]}
         label="+ PAPER (15g)"
         color="#0284c7"
         onClick={() => spawnInRoom('paper', 'sheet')}
       />
       <ARStudioButton
-        position={[0.31, 0.21, 0.016]}
+        position={[0.31, 0.27, 0.016]}
         label="+ CLOTH (0.2kg)"
         color="#dc2626"
         onClick={() => spawnInRoom('cloth', 'towel')}
@@ -308,28 +324,28 @@ function InARCraftStudioPanel() {
 
       {/* Row 2: Heavy Rigid Building Materials (+ Thin Wide Wood Plate) & Companion Pull */}
       <ARStudioButton
-        position={[-0.36, 0.1, 0.016]}
+        position={[-0.36, 0.16, 0.016]}
         width={0.22}
         label="+ WOOD BLK"
         color="#92400e"
         onClick={() => spawnInRoom('wood', 'block')}
       />
       <ARStudioButton
-        position={[-0.12, 0.1, 0.016]}
+        position={[-0.12, 0.16, 0.016]}
         width={0.22}
         label="+ WOOD PLATE"
         color="#b45309"
         onClick={() => spawnInRoom('wood', 'plate')}
       />
       <ARStudioButton
-        position={[0.12, 0.1, 0.016]}
+        position={[0.12, 0.16, 0.016]}
         width={0.22}
         label="+ METAL BLK"
         color="#475569"
         onClick={() => spawnInRoom('metal', 'block')}
       />
       <ARStudioButton
-        position={[0.36, 0.1, 0.016]}
+        position={[0.36, 0.16, 0.016]}
         width={0.22}
         label="PULL NEAR ME"
         color="#0d9488"
@@ -339,9 +355,10 @@ function InARCraftStudioPanel() {
         }}
       />
 
-      {/* Row 3: Color, Room Scan Wireframe, Opponent Gender */}
+      {/* Row 3: Color, Room Scan, Hide/Show AI, AI Gender */}
       <ARStudioButton
-        position={[-0.31, -0.01, 0.016]}
+        position={[-0.36, 0.05, 0.016]}
+        width={0.22}
         label="NEXT COLOR"
         color={selectedColor}
         onClick={() => {
@@ -351,13 +368,22 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0, -0.01, 0.016]}
-        label={showRoomMesh ? 'ROOM SCAN: ON' : 'ROOM SCAN: OFF'}
+        position={[-0.12, 0.05, 0.016]}
+        width={0.22}
+        label={showRoomMesh ? 'SCAN: ON' : 'SCAN: OFF'}
         color={showRoomMesh ? '#059669' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowRoomMesh(!showRoomMesh)}
       />
       <ARStudioButton
-        position={[0.31, -0.01, 0.016]}
+        position={[0.12, 0.05, 0.016]}
+        width={0.22}
+        label={showAiOpponent ? 'AI: VISIBLE' : 'AI: HIDDEN'}
+        color={showAiOpponent ? '#0284c7' : '#64748b'}
+        onClick={() => useMyRoomStore.getState().setShowAiOpponent(!showAiOpponent)}
+      />
+      <ARStudioButton
+        position={[0.36, 0.05, 0.016]}
+        width={0.22}
         label={`AI: ${aiGender.toUpperCase()}`}
         color="#db2777"
         onClick={() => useGameStore.getState().setAiAvatarGender(aiGender === 'male' ? 'female' : 'male')}
@@ -365,7 +391,7 @@ function InARCraftStudioPanel() {
 
       {/* Row 4: Opponent Mode, Clear Mine, Mic */}
       <ARStudioButton
-        position={[-0.31, -0.12, 0.016]}
+        position={[-0.31, -0.06, 0.016]}
         label={`MODE: ${opponentMode.toUpperCase()}`}
         color="#6366f1"
         onClick={() => {
@@ -374,13 +400,13 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0, -0.12, 0.016]}
+        position={[0, -0.06, 0.016]}
         label="CLEAR MINE"
         color="#d97706"
         onClick={() => clearAllMyRoomObjects(localPeerId || 'local')}
       />
       <ARStudioButton
-        position={[0.31, -0.12, 0.016]}
+        position={[0.31, -0.06, 0.016]}
         label={micEnabled ? 'MIC: ON' : 'MIC: MUTED'}
         color={micEnabled ? '#059669' : '#dc2626'}
         onClick={() => {
@@ -389,15 +415,84 @@ function InARCraftStudioPanel() {
         }}
       />
 
-      {/* Row 5: Self Body, Main Lobby & Exit AR */}
+      {/* Row 5: 6-Dart AR Mini-Game (Play vs AI or Peer, Relocate Board, Quick Throw) */}
       <ARStudioButton
-        position={[-0.31, -0.25, 0.016]}
+        position={[-0.31, -0.18, 0.016]}
+        label={
+          dartGame.active
+            ? dartGame.finished
+              ? 'REMATCH DARTS'
+              : 'END 6 DARTS'
+            : 'PLAY 6 DARTS'
+        }
+        color={dartGame.active && !dartGame.finished ? '#e11d48' : '#16a34a'}
+        onClick={() => {
+          const st = useMyRoomStore.getState()
+          if (!st.dartGame.active || st.dartGame.finished) {
+            st.startDartMatch(getForwardBoardPose(), localPeerId || 'local', true)
+          } else {
+            st.stopDartMatch(true)
+          }
+        }}
+      />
+      <ARStudioButton
+        position={[0, -0.18, 0.016]}
+        label={dartGame.active ? 'MOVE BOARD' : '6 DARTS READY'}
+        color={dartGame.active ? '#0891b2' : '#334155'}
+        onClick={() => {
+          if (useMyRoomStore.getState().dartGame.active) {
+            useMyRoomStore.getState().relocateDartboard(getForwardBoardPose(), true)
+          }
+        }}
+      />
+      <ARStudioButton
+        position={[0.31, -0.18, 0.016]}
+        label={dartGame.active ? 'THROW DART' : '6 DARTS VS AI/PEER'}
+        color={dartGame.active ? '#ca8a04' : '#334155'}
+        onClick={() => {
+          const st = useMyRoomStore.getState()
+          const dg = st.dartGame
+          const myId = localPeerId || 'local'
+          if (!dg.active || dg.finished) return
+          if (dg.turnOwnerId !== myId && dg.turnOwnerId !== 'local') return
+          const myCount = dg.throws.filter((t) => t.thrower === 'local').length
+          if (myCount >= 6) return
+          if (myRoomRuntime.darts.flyingDarts.some((d) => d.thrower === 'local' && !d.settled)) return
+
+          camera.getWorldPosition(_rayOrigin)
+          const launchPos: [number, number, number] = [
+            _rayOrigin.x + 0.14,
+            _rayOrigin.y - 0.12,
+            _rayOrigin.z,
+          ]
+          const vel = computeAIDartThrowVelocity(launchPos, dg.boardPose)
+          myRoomRuntime.darts.flyingDarts.push({
+            id: `tap_dart_${dg.matchId}_${myCount}_${Date.now()}`,
+            thrower: 'local',
+            throwerId: myId,
+            throwIndex: myCount,
+            inFlight: true,
+            settled: false,
+            flightTimeSec: 0,
+            pos: launchPos,
+            prevPos: [...launchPos],
+            vel,
+            quat: [0, 0, 0, 1],
+          })
+          myRoomRuntime.darts.readyDart = null
+          myRoomRuntime.darts.lastThrowAtSec = performance.now() / 1000
+        }}
+      />
+
+      {/* Row 6: Self Body, Main Lobby & Exit AR */}
+      <ARStudioButton
+        position={[-0.31, -0.31, 0.016]}
         label={showSelfBody ? 'MY BODY: ON' : 'MY BODY: OFF'}
         color={showSelfBody ? '#0ea5e9' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowSelfBody(!showSelfBody)}
       />
       <ARStudioButton
-        position={[0, -0.25, 0.016]}
+        position={[0, -0.31, 0.016]}
         label="MAIN LOBBY"
         color="#7c3aed"
         onClick={() => {
@@ -407,7 +502,7 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.31, -0.25, 0.016]}
+        position={[0.31, -0.31, 0.016]}
         label="EXIT AR"
         color="#b91c1c"
         onClick={() => {
@@ -422,9 +517,10 @@ export function MyRoomArena() {
   const peers = useGameStore((s) => s.peers)
   const localPeerId = useGameStore((s) => s.localPeerId)
   const opponentMode = useMyRoomStore((s) => s.opponentMode)
+  const showAiOpponent = useMyRoomStore((s) => s.showAiOpponent)
   const peerList = Object.values(peers)
   const showComputerAI =
-    opponentMode === 'computer' || (opponentMode === 'auto' && peerList.length === 0)
+    showAiOpponent && (opponentMode === 'computer' || (opponentMode === 'auto' && peerList.length === 0))
 
   useFrame((_, delta) => {
     stepMyRoomAI(delta, localPeerId, peerList.length > 0)
@@ -439,6 +535,7 @@ export function MyRoomArena() {
 
       <RoomScanner />
       <CraftObjectsLayer />
+      <DartArenaLayer />
       <MyRoomARRig />
       <LeftWristSmartWatch />
       <RightHandActiveToolView />

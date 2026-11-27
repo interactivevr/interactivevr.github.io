@@ -1,18 +1,19 @@
 import * as THREE from 'three'
 import { runtimeState } from '../store/useGameStore'
-import { computeTearSplitDeforms, encodeDeformOffsets, squeezeCraftWithPalm } from './craftEngine'
+import { encodeDeformOffsets, foldCraftWithHands, squeezeCraftWithPalm } from './craftEngine'
+import { computeAIDartThrowVelocity } from './dartEngine'
 import { clampInsideRoomWalls, findSupportingSurfaceY } from './roomPhysics'
 import {
   CLOTH_COLORS,
   CLAY_COLORS,
   CraftMaterialKind,
   CraftShapePreset,
+  DARTS_PER_PLAYER,
   MAX_ROOM_CRAFT_OBJECTS,
   PAPER_COLORS,
   RoomSurfaceCollider,
 } from './types'
 import {
-  deleteRuntimeCraftObject,
   MyRoomAIRuntime,
   myRoomRuntime,
   spawnRuntimeCraftObject,
@@ -178,7 +179,8 @@ export function resolveAIBodyCollision(
 export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boolean): void {
   const st = useMyRoomStore.getState()
   const aiActive =
-    st.opponentMode === 'computer' || (st.opponentMode === 'auto' && !hasHumanPeers)
+    st.showAiOpponent &&
+    (st.opponentMode === 'computer' || (st.opponentMode === 'auto' && !hasHumanPeers))
 
   if (!aiActive) return
 
@@ -335,13 +337,81 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     useMyRoomStore.getState().setStatusHint('Companion stepped back from your body movement')
   }
 
-  // 4. Arm & Hand Kinematics (facing user, seated vs standing height, welcoming offered object)
-  const cosY = Math.cos(ai.yaw)
-  const sinY = Math.sin(ai.yaw)
-  const fwdX = -sinY
-  const fwdZ = -cosY
-  const rightX = cosY
-  const rightZ = -sinY
+  // 4. Arm & Hand Kinematics (either throwing Darts if AI's Dart Turn, or welcoming/holding crafts)
+  const dg = st.dartGame
+  const aiDartTurn = dg.active && !dg.finished && dg.turnOwnerId === 'ai' && !hasHumanPeers
+
+  let cosY = Math.cos(ai.yaw)
+  let sinY = Math.sin(ai.yaw)
+  let fwdX = -sinY
+  let fwdZ = -cosY
+  let rightX = cosY
+  let rightZ = -sinY
+
+  if (aiDartTurn) {
+    const bp = dg.boardPose
+    const faceBoardYaw = Math.atan2(-(bp.pos[0] - ai.pos[0]), -(bp.pos[2] - ai.pos[2]))
+    ai.yaw += normalizeAngleDelta(faceBoardYaw, ai.yaw) * Math.min(1, cDt * 8.5)
+    cosY = Math.cos(ai.yaw)
+    sinY = Math.sin(ai.yaw)
+    fwdX = -sinY
+    fwdZ = -cosY
+    rightX = cosY
+    rightZ = -sinY
+
+    const oppCount = dg.throws.filter((t) => t.thrower === 'opponent').length
+    const hasActiveOppFlight = myRoomRuntime.darts.flyingDarts.some(
+      (d) => d.thrower === 'opponent' && !d.settled
+    )
+    if (!hasActiveOppFlight && oppCount < DARTS_PER_PLAYER && ai.dartDispatchedMatchThrowIdx !== oppCount) {
+      ai.dartAimTimerSec += cDt
+      // Pull throwing arm back near cheek then snap forward at 0.72s
+      const pullBack = Math.min(1, ai.dartAimTimerSec / 0.55)
+      const aimShoulderY = floorY + 1.42 - ai.sitBlend * 0.36
+      ai.leftHand = [
+        ai.pos[0] - rightX * 0.2,
+        aimShoulderY - 0.18,
+        ai.pos[2] - rightZ * 0.2 + fwdZ * 0.12,
+      ]
+      ai.rightHand = [
+        ai.pos[0] + rightX * 0.22 + fwdX * (0.28 - pullBack * 0.16),
+        aimShoulderY + 0.04 + pullBack * 0.08,
+        ai.pos[2] + rightZ * 0.22 + fwdZ * (0.28 - pullBack * 0.16),
+      ]
+
+      if (ai.dartAimTimerSec >= 0.72) {
+        const launchPos: [number, number, number] = [
+          ai.pos[0] + rightX * 0.2 + fwdX * 0.35,
+          aimShoulderY + 0.1,
+          ai.pos[2] + rightZ * 0.2 + fwdZ * 0.35,
+        ]
+        ai.rightHand = [...launchPos]
+        const vel = computeAIDartThrowVelocity(launchPos, bp)
+        myRoomRuntime.darts.flyingDarts.push({
+          id: `ai_dart_${dg.matchId}_${oppCount}_${Date.now()}`,
+          thrower: 'opponent',
+          throwerId: 'ai',
+          throwIndex: oppCount,
+          inFlight: true,
+          settled: false,
+          flightTimeSec: 0,
+          pos: [...launchPos],
+          prevPos: [...launchPos],
+          vel,
+          quat: [0, 0, 0, 1],
+        })
+        ai.dartDispatchedMatchThrowIdx = oppCount
+        ai.dartAimTimerSec = 0
+        useMyRoomStore
+          .getState()
+          .setStatusHint(`AI Opponent threw Dart #${oppCount + 1}/${DARTS_PER_PLAYER}!`)
+      }
+    }
+    return
+  }
+
+  ai.dartAimTimerSec = 0
+
   const shoulderHeight = floorY + 1.16 - ai.sitBlend * 0.36
   const holdCenterX = ai.pos[0] + fwdX * 0.36
   const holdCenterY = shoulderHeight - 0.04
@@ -369,7 +439,7 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
       ]
     } else {
       const wave = ai.actionMode === 'sculpt' ? Math.sin(nowSec * 6.0) * 0.05 : 0
-      const spread = ai.actionMode === 'tear' ? 0.24 : ai.holdingObjId ? 0.11 - Math.abs(wave) : 0.21
+      const spread = ai.holdingObjId ? 0.12 - Math.abs(wave) : 0.21
       ai.leftHand = [
         holdCenterX - rightX * spread,
         holdCenterY + wave * 0.4,
@@ -386,7 +456,7 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
       ]
     } else {
       const wave = ai.actionMode === 'sculpt' ? Math.sin(nowSec * 6.0) * 0.05 : 0
-      const spread = ai.actionMode === 'tear' ? 0.24 : ai.holdingObjId ? 0.11 - Math.abs(wave) : 0.21
+      const spread = ai.holdingObjId ? 0.12 - Math.abs(wave) : 0.21
       ai.rightHand = [
         holdCenterX + rightX * spread,
         holdCenterY - wave * 0.4,
@@ -395,44 +465,72 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     }
   }
 
-  // 5. Handle Collected/Created Held Object in AI's Hands
+  // 5. Handle Held Object Safely (NO tearing, NO breaking, and user-created objects stay 100% intact!)
   const heldObj = ai.holdingObjId ? myRoomRuntime.objects.get(ai.holdingObjId) : null
   if (heldObj) {
     heldObj.ownerId = 'ai'
     heldObj.pos = [holdCenterX, holdCenterY, holdCenterZ]
     heldObj.vel = [0, 0, 0]
 
-    if (ai.actionMode === 'sculpt') {
-      const res = squeezeCraftWithPalm(
-        heldObj.meshData,
-        heldObj.kind,
-        heldObj.pos,
-        heldObj.quat,
-        ai.leftHand,
-        [rightX, 0.1, rightZ],
-        0.72,
-        heldObj.deformSeed,
-        heldObj.crumpleFactor,
-        cDt
-      )
-      if (res.dirty) {
-        heldObj.crumpleFactor = res.nextCrumple
-        heldObj.deformQ = encodeDeformOffsets(
-          heldObj.meshData.restPositions,
-          heldObj.meshData.currPositions
+    if (ai.actionMode === 'sculpt' && heldObj.creatorId === 'ai') {
+      if (heldObj.kind === 'paper') {
+        const fRes = foldCraftWithHands(
+          heldObj.meshData,
+          heldObj.kind,
+          heldObj.quat,
+          ai.leftHand,
+          ai.rightHand,
+          heldObj.foldFactor,
+          cDt * 0.85
         )
-        if (nowSec - _lastNetBroadcastSec > 0.14) {
-          _lastNetBroadcastSec = nowSec
-          myRoomRuntime.onCraftDeformSend?.({
-            id: heldObj.id,
-            ownerId: 'ai',
-            epoch: heldObj.epoch,
-            pos: [...heldObj.pos],
-            quat: [...heldObj.quat],
-            crumpleFactor: heldObj.crumpleFactor,
-            deformQ: [...heldObj.deformQ],
-            timestamp: Date.now(),
-          })
+        if (fRes.dirty) {
+          heldObj.foldFactor = fRes.nextFold
+          heldObj.deformQ = encodeDeformOffsets(heldObj.meshData.restPositions, heldObj.meshData.currPositions)
+          if (nowSec - _lastNetBroadcastSec > 0.14) {
+            _lastNetBroadcastSec = nowSec
+            myRoomRuntime.onCraftDeformSend?.({
+              id: heldObj.id,
+              ownerId: 'ai',
+              epoch: heldObj.epoch,
+              pos: [...heldObj.pos],
+              quat: [...heldObj.quat],
+              crumpleFactor: heldObj.crumpleFactor,
+              foldFactor: heldObj.foldFactor,
+              deformQ: [...heldObj.deformQ],
+              timestamp: Date.now(),
+            })
+          }
+        }
+      } else {
+        const res = squeezeCraftWithPalm(
+          heldObj.meshData,
+          heldObj.kind,
+          heldObj.pos,
+          heldObj.quat,
+          ai.leftHand,
+          [rightX, 0.1, rightZ],
+          0.65,
+          heldObj.deformSeed,
+          heldObj.crumpleFactor,
+          cDt
+        )
+        if (res.dirty) {
+          heldObj.crumpleFactor = res.nextCrumple
+          heldObj.deformQ = encodeDeformOffsets(heldObj.meshData.restPositions, heldObj.meshData.currPositions)
+          if (nowSec - _lastNetBroadcastSec > 0.14) {
+            _lastNetBroadcastSec = nowSec
+            myRoomRuntime.onCraftDeformSend?.({
+              id: heldObj.id,
+              ownerId: 'ai',
+              epoch: heldObj.epoch,
+              pos: [...heldObj.pos],
+              quat: [...heldObj.quat],
+              crumpleFactor: heldObj.crumpleFactor,
+              foldFactor: heldObj.foldFactor,
+              deformQ: [...heldObj.deformQ],
+              timestamp: Date.now(),
+            })
+          }
         }
       }
     }
@@ -440,7 +538,7 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     ai.holdingObjId = null
   }
 
-  // Pick up unheld offered gift once user releases it OR when AI walks close enough to reach it
+  // Pick up unheld offered gift cleanly & place beside self without tearing or breaking!
   if (ai.actionMode === 'collect' && giftObj && !giftObj.isHeldByLocal && giftObj.ownerId === null) {
     const dReach = Math.hypot(giftObj.pos[0] - holdCenterX, giftObj.pos[2] - holdCenterZ)
     if (dReach < 0.85) {
@@ -449,8 +547,8 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
       ai.holdingObjId = giftObj.id
       ai.targetObjId = null
       ai.actionMode = 'sculpt'
-      ai.actionTimerSec = 1.6
-      useMyRoomStore.getState().setStatusHint('Companion received your object & is shaping/collecting it!')
+      ai.actionTimerSec = 1.4
+      useMyRoomStore.getState().setStatusHint('Companion carefully received your object without altering or tearing it!')
       myRoomRuntime.onCraftObjectSend?.(stripToNetState(giftObj))
       return
     }
@@ -460,7 +558,7 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
     ai.actionTimerSec = 1.2
   }
 
-  // 6. State transitions (create Clay, Paper & Cloth objects, squeeze, place neatly beside self)
+  // 6. State transitions (create Clay, Paper & Cloth gently; NEVER tear or break any object!)
   ai.actionTimerSec -= cDt
   if (ai.actionTimerSec <= 0 && !userInteractingWithBody && !ai.pullToUserActive) {
     if (ai.actionMode === 'idle' || ai.actionMode === 'walk') {
@@ -495,69 +593,13 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
         })
         ai.holdingObjId = created.id
         ai.actionMode = 'sculpt'
-        ai.actionTimerSec = 2.2
+        ai.actionTimerSec = 2.0
       } else {
         ai.actionMode = 'idle'
         ai.actionTimerSec = 2.5
       }
     } else if (ai.actionMode === 'sculpt') {
-      if (heldObj && heldObj.creatorId === 'ai' && Math.random() < 0.35) {
-        const split = computeTearSplitDeforms(
-          heldObj.meshData,
-          heldObj.kind,
-          heldObj.pos,
-          heldObj.quat,
-          ai.leftHand,
-          ai.rightHand,
-          heldObj.deformSeed,
-          heldObj.tearGeneration
-        )
-        if (split.canTear) {
-          const basePos: [number, number, number] = [...heldObj.pos]
-          const k = heldObj.kind
-          const pr = heldObj.preset
-          const col = heldObj.color
-          const ng = heldObj.tearGeneration + 1
-          const ns = heldObj.scale * split.childScale
-          deleteRuntimeCraftObject(heldObj.id, true)
-          ai.holdingObjId = null
-
-          const spotL = getSideCollectionSpot(ai.collectedIds.length)
-          const spotR = getSideCollectionSpot(ai.collectedIds.length + 1)
-          const lPiece = spawnRuntimeCraftObject({
-            ownerId: null,
-            creatorId: 'ai',
-            kind: k,
-            preset: pr,
-            color: col,
-            pos: [basePos[0] + split.leftOffsetWorld[0], basePos[1], basePos[2] + split.leftOffsetWorld[2]],
-            vel: [(spotL[0] - basePos[0]) * 1.1, 0.3, (spotL[2] - basePos[2]) * 1.1],
-            scale: ns,
-            tearGeneration: ng,
-            deformQ: split.leftDeformQ,
-            broadcast: true,
-          })
-          const rPiece = spawnRuntimeCraftObject({
-            ownerId: null,
-            creatorId: 'ai',
-            kind: k,
-            preset: pr,
-            color: col,
-            pos: [basePos[0] + split.rightOffsetWorld[0], basePos[1], basePos[2] + split.rightOffsetWorld[2]],
-            vel: [(spotR[0] - basePos[0]) * 1.1, 0.3, (spotR[2] - basePos[2]) * 1.1],
-            scale: ns,
-            tearGeneration: ng,
-            deformQ: split.rightDeformQ,
-            broadcast: true,
-          })
-          ai.collectedIds.push(lPiece.id, rPiece.id)
-          ai.actionMode = 'idle'
-          ai.actionTimerSec = 2.4
-          return
-        }
-      }
-
-      // Place finished / collected object neatly beside her/him on the room table or floor!
+      // Place intact object neatly beside her/him on the room table or floor!
       if (heldObj) {
         const spot = getSideCollectionSpot(ai.collectedIds.length)
         heldObj.ownerId = null
