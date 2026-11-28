@@ -26,9 +26,10 @@ import {
   squeezeCraftWithPalm,
 } from './craftEngine'
 import { computeRightToolWorldTransform } from './LeftWristSmartWatch'
+import { snapHandDartboardPose } from './dartEngine'
 import { clampInsideRoomWalls, computeWorldObjectBox, findSupportingSurfaceY } from './roomPhysics'
 import { snapDecorNearWallIfClose } from './RoomShowcaseLayer'
-import { DARTS_PER_PLAYER, MATERIAL_PHYSICS, ROOM_DECOR_CATALOG } from './types'
+import { DARTBOARD_RADIUS, DARTS_PER_PLAYER, MATERIAL_PHYSICS, ROOM_DECOR_CATALOG } from './types'
 import {
   deleteRuntimeCraftObject,
   getCombinedRoomSurfaces,
@@ -47,6 +48,7 @@ const PALM_SQUEEZE_RADIUS = 0.15
 type CompanionHoldState =
   | { type: 'ai-hand'; aiSide: 'left' | 'right' }
   | { type: 'hair' }
+  | { type: 'ai-body'; offsetXZ: [number, number] }
   | null
 
 const _worldPos = new THREE.Vector3()
@@ -59,6 +61,8 @@ const _dartRight = new THREE.Vector3()
 const _dartDir = new THREE.Vector3()
 const _dartAimQ = new THREE.Quaternion()
 const _dartZeroFwd = new THREE.Vector3(0, 0, -1)
+const _dartBarrelFwd = new THREE.Vector3()
+const _boardPullPos = new THREE.Vector3()
 
 export function MyRoomARRig() {
   const originRef = useRef<THREE.Group>(null)
@@ -100,6 +104,16 @@ export function MyRoomARRig() {
     right: null,
   })
   const heldDartHandRef = useRef<HandSide | null>(null)
+  const heldBoardHandRef = useRef<HandSide | null>(null)
+  const boardGrabOffsetRef = useRef(new THREE.Vector3())
+  const lastBoardDragSyncMsRef = useRef(0)
+  const pullingStuckDartRef = useRef<{
+    handSide: HandSide
+    throwIndex: number
+    practiceId: string | null
+    startHandPos: [number, number, number]
+    boardNormal: [number, number, number]
+  } | null>(null)
   const companionHoldRef = useRef<{ left: CompanionHoldState; right: CompanionHoldState }>({
     left: null,
     right: null,
@@ -318,6 +332,8 @@ export function MyRoomARRig() {
       const wasGrabbing = grabStateRef.current[side]
       let posArr: [number, number, number] = side === 'left' ? lp.leftPos : lp.rightPos
       let quatArr: [number, number, number, number] = side === 'left' ? lp.leftQuat : lp.rightQuat
+      let dartGripPos: [number, number, number] = posArr
+      let dartAimQuat: [number, number, number, number] = quatArr
       let curls: [number, number, number, number, number] =
         side === 'left' ? lp.leftCurls : lp.rightCurls
       let isGrabbing = false
@@ -330,6 +346,9 @@ export function MyRoomARRig() {
         ctrl.object.getWorldQuaternion(_worldQuat)
         posArr = [_worldPos.x, _worldPos.y, _worldPos.z]
         quatArr = [_worldQuat.x, _worldQuat.y, _worldQuat.z, _worldQuat.w]
+        _dartBarrelFwd.set(0, 0, -0.028).applyQuaternion(_worldQuat)
+        dartGripPos = [posArr[0] + _dartBarrelFwd.x, posArr[1] + _dartBarrelFwd.y, posArr[2] + _dartBarrelFwd.z]
+        dartAimQuat = quatArr
         estimator.push(_worldPos.x, _worldPos.y, _worldPos.z, nowSec)
         if (side === 'left') {
           myRoomRuntime.leftWristPose.valid = false
@@ -363,6 +382,8 @@ export function MyRoomARRig() {
         if (analysis.valid) {
           posArr = analysis.palmWorldPos
           quatArr = analysis.palmWorldQuat
+          dartGripPos = analysis.dartGripPos ?? posArr
+          dartAimQuat = analysis.dartAimQuat ?? quatArr
           curls = analysis.curls
           pinchDist = analysis.pinchDist
           isGrabbing = analysis.isGrabbing
@@ -376,6 +397,11 @@ export function MyRoomARRig() {
             myRoomRuntime.rightIndexTip.valid = true
           }
         }
+      }
+
+      // Authentic 3-finger dart pinch posture when actively holding a dart in this hand
+      if (heldDartHandRef.current === side) {
+        curls = [0.85, 0.78, 0.72, 0.24, 0.18]
       }
 
       grabStateRef.current[side] = isGrabbing
@@ -411,6 +437,8 @@ export function MyRoomARRig() {
         side,
         posArr,
         quatArr,
+        dartGripPos,
+        dartAimQuat,
         palmNormal,
         isGrabbing,
         pinchDist,
@@ -511,8 +539,9 @@ export function MyRoomARRig() {
       myRoomRuntime.darts.readyDart = null
     }
 
-    // 1. Acquire / release grabs on left and right hands independently (Darts first, then Crafts, then AI)
+    // 1. Acquire / release grabs on left and right hands independently (Stuck/Ready/Fallen Darts, Dartboard, Crafts, Decor, Companion)
     const handleGrabLifecycle = (handRes: ReturnType<typeof readHand>) => {
+      // A) Actively holding a dart with 3 fingers (sharp tip pointed forward)
       if (heldDartHandRef.current === handRes.side) {
         const rd = myRoomRuntime.darts.readyDart
         if (!rd) {
@@ -520,26 +549,128 @@ export function MyRoomARRig() {
           return
         }
         if (handRes.isGrabbing) {
-          rd.pos = [...handRes.posArr]
-          rd.quat = [...handRes.quatArr]
+          rd.pos = [...handRes.dartGripPos]
+          rd.quat = [...handRes.dartAimQuat]
         } else {
           const throwVel = handRes.estimator.computeVelocity(nowSec, 1.5, 12.0)
           const speed = Math.hypot(throwVel[0], throwVel[1], throwVel[2])
           heldDartHandRef.current = null
           handRes.estimator.reset()
-          if (speed > 1.3) {
+          if (speed > 1.15 || rd.isPractice) {
             rd.inFlight = true
             rd.settled = false
             rd.flightTimeSec = 0
-            rd.prevPos = [...handRes.posArr]
-            rd.pos = [...handRes.posArr]
-            rd.vel = [...throwVel]
+            rd.prevPos = [...handRes.dartGripPos]
+            rd.pos = [...handRes.dartGripPos]
+            rd.quat = [...handRes.dartAimQuat]
+            rd.vel =
+              speed > 1.15
+                ? [...throwVel]
+                : [throwVel[0] * 0.45, Math.min(-0.18, throwVel[1]), throwVel[2] * 0.45]
             myRoomRuntime.darts.flyingDarts.push(rd)
             myRoomRuntime.darts.readyDart = null
-            myRoomRuntime.darts.lastThrowAtSec = nowSec
-            playThrowSfx(speed)
-            pulseXRControllerHaptics(handRes.activeInput, 0.55, 40)
+            if (!rd.isPractice) {
+              myRoomRuntime.darts.lastThrowAtSec = nowSec
+            }
+            if (speed > 1.15) {
+              playThrowSfx(speed)
+              pulseXRControllerHaptics(handRes.activeInput, 0.55, 40)
+            }
           }
+        }
+        return
+      }
+
+      // B) Actively carrying & placing the Dartboard by hand
+      if (heldBoardHandRef.current === handRes.side) {
+        const curBoard = useMyRoomStore.getState().dartGame.boardPose
+        const desiredPos: [number, number, number] = [
+          handRes.posArr[0] + boardGrabOffsetRef.current.x,
+          handRes.posArr[1] + boardGrabOffsetRef.current.y,
+          handRes.posArr[2] + boardGrabOffsetRef.current.z,
+        ]
+        if (handRes.isGrabbing) {
+          myRoomRuntime.darts.boardGrabbedByLocal = true
+          const nx = lp.headPos[0] - desiredPos[0]
+          const nz = lp.headPos[2] - desiredPos[2]
+          const nLen = Math.hypot(nx, nz) || 1
+          const ux = nx / nLen
+          const uz = nz / nLen
+          const nowMs = performance.now()
+          if (
+            nowMs - lastBoardDragSyncMsRef.current > 40 ||
+            Math.hypot(desiredPos[0] - curBoard.pos[0], desiredPos[2] - curBoard.pos[2]) > 0.015
+          ) {
+            lastBoardDragSyncMsRef.current = nowMs
+            useMyRoomStore.getState().relocateDartboard(
+              {
+                pos: [desiredPos[0], Math.max(myRoomRuntime.floorY + 0.48, desiredPos[1]), desiredPos[2]],
+                normal: [ux, 0, uz],
+                yaw: Math.atan2(ux, uz),
+                mountedOnWall: false,
+              },
+              false
+            )
+          }
+        } else {
+          heldBoardHandRef.current = null
+          myRoomRuntime.darts.boardGrabbedByLocal = false
+          const placed = snapHandDartboardPose(
+            desiredPos,
+            lp.headPos,
+            getCombinedRoomSurfaces(),
+            myRoomRuntime.floorY,
+            myRoomRuntime.roomBoundsXZ
+          )
+          useMyRoomStore.getState().relocateDartboard(placed, true)
+          playMaterialActionSfx('wood', 'watch_tap')
+          pulseXRControllerHaptics(handRes.activeInput, 0.5, 35)
+        }
+        return
+      }
+
+      // C) Physically pulling a stuck dart straight out of the dartboard cork
+      if (pullingStuckDartRef.current?.handSide === handRes.side) {
+        const pull = pullingStuckDartRef.current
+        if (!handRes.isGrabbing) {
+          pullingStuckDartRef.current = null
+          myRoomRuntime.darts.pullingVisual = null
+          return
+        }
+        const dx = handRes.posArr[0] - pull.startHandPos[0]
+        const dy = handRes.posArr[1] - pull.startHandPos[1]
+        const dz = handRes.posArr[2] - pull.startHandPos[2]
+        const alongNormal = dx * pull.boardNormal[0] + dy * pull.boardNormal[1] + dz * pull.boardNormal[2]
+        const pullDist = Math.max(0, Math.min(0.085, alongNormal))
+        myRoomRuntime.darts.pullingVisual = { throwIndex: pull.throwIndex, pullOffsetM: pullDist }
+
+        if (pullDist >= 0.062 || Math.hypot(dx, dy, dz) >= 0.125) {
+          pullingStuckDartRef.current = null
+          myRoomRuntime.darts.pullingVisual = null
+          if (pull.practiceId) {
+            const idx = myRoomRuntime.darts.practiceDarts.findIndex((d) => d.id === pull.practiceId)
+            if (idx >= 0) myRoomRuntime.darts.practiceDarts.splice(idx, 1)
+          } else {
+            useMyRoomStore.getState().pullDartRecord(pull.throwIndex, true)
+          }
+          myRoomRuntime.darts.readyDart = {
+            id: `pulled_dart_${dg.matchId}_${Date.now()}`,
+            thrower: 'local',
+            throwerId: myId,
+            throwIndex: localThrowsCount,
+            isPractice: true,
+            inFlight: false,
+            settled: false,
+            flightTimeSec: 0,
+            pos: [...handRes.dartGripPos],
+            prevPos: [...handRes.dartGripPos],
+            vel: [0, 0, 0],
+            quat: [...handRes.dartAimQuat],
+          }
+          heldDartHandRef.current = handRes.side
+          handRes.estimator.reset()
+          playMaterialActionSfx('wood', 'dart_hit')
+          pulseXRControllerHaptics(handRes.activeInput, 0.65, 45)
         }
         return
       }
@@ -616,7 +747,58 @@ export function MyRoomARRig() {
           handRes.estimator.reset()
         }
       } else if (handRes.isGrabbing && !(handRes.side === 'right' && equippedRightTool !== 'none')) {
-        // Pick up hovering Ready Dart if your Dart Turn is active!
+        // 1) Grab stuck dart on dartboard first so user can pull darts cleanly off the cork
+        if (dg.active && heldDartHandRef.current === null && !pullingStuckDartRef.current) {
+          const bp = dg.boardPose
+          const rightX = bp.normal[2]
+          const rightZ = -bp.normal[0]
+          const rLen = Math.hypot(rightX, rightZ) || 1
+          const rx = rightX / rLen
+          const rz = rightZ / rLen
+
+          let bestStuckIdx = -1
+          let bestPracticeId: string | null = null
+          let bestStuckDist = 0.105
+
+          dg.throws.forEach((rec, idx) => {
+            if (!rec.stuck || rec.pulled) return
+            const wx = bp.pos[0] + rx * rec.localX + bp.normal[0] * 0.068
+            const wy = bp.pos[1] + rec.localY
+            const wz = bp.pos[2] + rz * rec.localX + bp.normal[2] * 0.068
+            const d = Math.hypot(handRes.posArr[0] - wx, handRes.posArr[1] - wy, handRes.posArr[2] - wz)
+            if (d < bestStuckDist) {
+              bestStuckDist = d
+              bestStuckIdx = idx
+              bestPracticeId = null
+            }
+          })
+          myRoomRuntime.darts.practiceDarts.forEach((pd) => {
+            if (!pd.stuckOnBoardLocal) return
+            const wx = bp.pos[0] + rx * pd.stuckOnBoardLocal[0] + bp.normal[0] * 0.068
+            const wy = bp.pos[1] + pd.stuckOnBoardLocal[1]
+            const wz = bp.pos[2] + rz * pd.stuckOnBoardLocal[0] + bp.normal[2] * 0.068
+            const d = Math.hypot(handRes.posArr[0] - wx, handRes.posArr[1] - wy, handRes.posArr[2] - wz)
+            if (d < bestStuckDist) {
+              bestStuckDist = d
+              bestStuckIdx = -1
+              bestPracticeId = pd.id
+            }
+          })
+
+          if (bestStuckIdx >= 0 || bestPracticeId) {
+            pullingStuckDartRef.current = {
+              handSide: handRes.side,
+              throwIndex: bestStuckIdx,
+              practiceId: bestPracticeId,
+              startHandPos: [...handRes.posArr],
+              boardNormal: [...bp.normal],
+            }
+            pulseXRControllerHaptics(handRes.activeInput, 0.35, 24)
+            return
+          }
+        }
+
+        // 2) Pick up hovering Ready Dart if your Dart Turn is active!
         const rd = myRoomRuntime.darts.readyDart
         if (rd && heldDartHandRef.current === null && isMyDartTurn) {
           const dDart = Math.hypot(
@@ -632,7 +814,65 @@ export function MyRoomARRig() {
           }
         }
 
-        // Check if grabbing a craft object first; if none in reach, check AI companion's hand or hair!
+        // 3) Pick up a fallen dart resting on the floor or supporting plane!
+        if (dg.active && heldDartHandRef.current === null) {
+          let pickedFloorThrowIdx = -1
+          let pickedFloorPracticeIdx = -1
+          let bestFloorDist = 0.16
+          dg.throws.forEach((rec, idx) => {
+            if (rec.stuck || rec.pulled || !rec.worldPos) return
+            const d = Math.hypot(
+              handRes.posArr[0] - rec.worldPos[0],
+              handRes.posArr[1] - rec.worldPos[1],
+              handRes.posArr[2] - rec.worldPos[2]
+            )
+            if (d < bestFloorDist) {
+              bestFloorDist = d
+              pickedFloorThrowIdx = idx
+            }
+          })
+          myRoomRuntime.darts.practiceDarts.forEach((pd, idx) => {
+            if (pd.stuckOnBoardLocal) return
+            const d = Math.hypot(
+              handRes.posArr[0] - pd.pos[0],
+              handRes.posArr[1] - pd.pos[1],
+              handRes.posArr[2] - pd.pos[2]
+            )
+            if (d < bestFloorDist) {
+              bestFloorDist = d
+              pickedFloorThrowIdx = -1
+              pickedFloorPracticeIdx = idx
+            }
+          })
+
+          if (pickedFloorThrowIdx >= 0 || pickedFloorPracticeIdx >= 0) {
+            if (pickedFloorThrowIdx >= 0) {
+              useMyRoomStore.getState().pullDartRecord(pickedFloorThrowIdx, true)
+            } else {
+              myRoomRuntime.darts.practiceDarts.splice(pickedFloorPracticeIdx, 1)
+            }
+            myRoomRuntime.darts.readyDart = {
+              id: `picked_dart_${dg.matchId}_${Date.now()}`,
+              thrower: 'local',
+              throwerId: myId,
+              throwIndex: localThrowsCount,
+              isPractice: true,
+              inFlight: false,
+              settled: false,
+              flightTimeSec: 0,
+              pos: [...handRes.dartGripPos],
+              prevPos: [...handRes.dartGripPos],
+              vel: [0, 0, 0],
+              quat: [...handRes.dartAimQuat],
+            }
+            heldDartHandRef.current = handRes.side
+            handRes.estimator.reset()
+            pulseXRControllerHaptics(handRes.activeInput, 0.4, 28)
+            return
+          }
+        }
+
+        // Check if grabbing a craft object first; if none in reach, check Decor, Dartboard, or AI Companion!
         let bestObj: RuntimeCraftObject | null = null
         let bestDist = Infinity
         myRoomRuntime.objects.forEach((candidate) => {
@@ -688,6 +928,25 @@ export function MyRoomARRig() {
             pulseXRControllerHaptics(handRes.activeInput, 0.4, 28)
             myRoomRuntime.onDecorSend?.(stripDecorToNetState(pickedDecor))
           } else if (
+            dg.active &&
+            heldBoardHandRef.current === null &&
+            Math.hypot(
+              handRes.posArr[0] - dg.boardPose.pos[0],
+              handRes.posArr[1] - dg.boardPose.pos[1],
+              handRes.posArr[2] - dg.boardPose.pos[2]
+            ) < DARTBOARD_RADIUS + 0.14
+          ) {
+            // Grab/Catch Dartboard directly by hand to reposition & snap on wall or place cleanly anywhere
+            heldBoardHandRef.current = handRes.side
+            myRoomRuntime.darts.boardGrabbedByLocal = true
+            boardGrabOffsetRef.current.set(
+              dg.boardPose.pos[0] - handRes.posArr[0],
+              dg.boardPose.pos[1] - handRes.posArr[1],
+              dg.boardPose.pos[2] - handRes.posArr[2]
+            )
+            pulseXRControllerHaptics(handRes.activeInput, 0.45, 32)
+            useMyRoomStore.getState().setStatusHint('Carrying Dartboard — release near wall or in room to place!')
+          } else if (
             myRoomSt.showAiOpponent &&
             companionHoldRef.current[handRes.side] === null &&
             useGameStore.getState().peers &&
@@ -695,34 +954,45 @@ export function MyRoomARRig() {
               (myRoomSt.opponentMode === 'auto' &&
                 Object.keys(useGameStore.getState().peers).length === 0))
           ) {
-          const ai = myRoomRuntime.ai
-          const dHair = Math.hypot(
-            handRes.posArr[0] - ai.hairWorldPos[0],
-            handRes.posArr[1] - ai.hairWorldPos[1],
-            handRes.posArr[2] - ai.hairWorldPos[2]
-          )
-          const dLeftHand = Math.hypot(
-            handRes.posArr[0] - ai.leftHand[0],
-            handRes.posArr[1] - ai.leftHand[1],
-            handRes.posArr[2] - ai.leftHand[2]
-          )
-          const dRightHand = Math.hypot(
-            handRes.posArr[0] - ai.rightHand[0],
-            handRes.posArr[1] - ai.rightHand[1],
-            handRes.posArr[2] - ai.rightHand[2]
-          )
-          if (dHair < 0.18) {
-            companionHoldRef.current[handRes.side] = { type: 'hair' }
-            pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
-            useMyRoomStore.getState().setStatusHint('Holding companion hair')
-          } else if (dLeftHand < 0.19) {
-            companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'left' }
-            pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
-            useMyRoomStore.getState().setStatusHint('Holding companion hand')
+            const ai = myRoomRuntime.ai
+            const dHair = Math.hypot(
+              handRes.posArr[0] - ai.hairWorldPos[0],
+              handRes.posArr[1] - ai.hairWorldPos[1],
+              handRes.posArr[2] - ai.hairWorldPos[2]
+            )
+            const dLeftHand = Math.hypot(
+              handRes.posArr[0] - ai.leftHand[0],
+              handRes.posArr[1] - ai.leftHand[1],
+              handRes.posArr[2] - ai.leftHand[2]
+            )
+            const dRightHand = Math.hypot(
+              handRes.posArr[0] - ai.rightHand[0],
+              handRes.posArr[1] - ai.rightHand[1],
+              handRes.posArr[2] - ai.rightHand[2]
+            )
+            const dBodyXZ = Math.hypot(handRes.posArr[0] - ai.pos[0], handRes.posArr[2] - ai.pos[2])
+            const inBodyY =
+              handRes.posArr[1] >= myRoomRuntime.floorY + 0.65 &&
+              handRes.posArr[1] <= myRoomRuntime.floorY + 1.56
+            if (dHair < 0.18) {
+              companionHoldRef.current[handRes.side] = { type: 'hair' }
+              pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
+              useMyRoomStore.getState().setStatusHint('Holding companion hair — pull to guide her')
+            } else if (dLeftHand < 0.19) {
+              companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'left' }
+              pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
+              useMyRoomStore.getState().setStatusHint('Holding companion hand — lead where you pull')
             } else if (dRightHand < 0.19) {
               companionHoldRef.current[handRes.side] = { type: 'ai-hand', aiSide: 'right' }
               pulseXRControllerHaptics(handRes.activeInput, 0.35, 30)
-              useMyRoomStore.getState().setStatusHint('Holding companion hand')
+              useMyRoomStore.getState().setStatusHint('Holding companion hand — lead where you pull')
+            } else if (dBodyXZ < 0.3 && inBodyY) {
+              companionHoldRef.current[handRes.side] = {
+                type: 'ai-body',
+                offsetXZ: [ai.pos[0] - handRes.posArr[0], ai.pos[2] - handRes.posArr[2]],
+              }
+              pulseXRControllerHaptics(handRes.activeInput, 0.42, 32)
+              useMyRoomStore.getState().setStatusHint('Holding companion — move hand to guide her')
             }
           }
         }
@@ -732,11 +1002,12 @@ export function MyRoomARRig() {
     handleGrabLifecycle(leftRes)
     handleGrabLifecycle(rightRes)
 
-    // Update tactile Computer Companion interactions (hand-holding, hair-holding, head pet, shoulder touch)
+    // Update tactile Computer Companion interactions & live Pull-Follow locomotion
     const ai = myRoomRuntime.ai
     ai.heldHandByUser = null
     ai.hairPullTarget = null
     ai.touchedShoulderSide = null
+    ai.followPullTargetXZ = null
 
     ;[leftRes, rightRes].forEach((hRes) => {
       const hold = companionHoldRef.current[hRes.side]
@@ -747,6 +1018,23 @@ export function MyRoomARRig() {
           ai.heldHandByUser = hold.aiSide
           if (hold.aiSide === 'left') ai.leftHand = [...hRes.posArr]
           else ai.rightHand = [...hRes.posArr]
+          // Pull companion gently along behind your hand once extended beyond natural 30cm arm slack
+          const dxA = ai.pos[0] - hRes.posArr[0]
+          const dzA = ai.pos[2] - hRes.posArr[2]
+          const dXZ = Math.hypot(dxA, dzA)
+          if (dXZ > 0.3) {
+            ai.followPullTargetXZ = [
+              hRes.posArr[0] + (dxA / dXZ) * 0.28,
+              hRes.posArr[2] + (dzA / dXZ) * 0.28,
+            ]
+          }
+        } else if (hold.type === 'ai-body') {
+          _boardPullPos.set(
+            hRes.posArr[0] + hold.offsetXZ[0],
+            ai.pos[1],
+            hRes.posArr[2] + hold.offsetXZ[1]
+          )
+          ai.followPullTargetXZ = [_boardPullPos.x, _boardPullPos.z]
         } else if (hold.type === 'hair') {
           ai.hairPullTarget = [...hRes.posArr]
           const pdx = hRes.posArr[0] - ai.hairWorldPos[0]
@@ -756,6 +1044,15 @@ export function MyRoomARRig() {
           const localSide = pdx * cosY - (hRes.posArr[2] - ai.hairWorldPos[2]) * sinY
           ai.headReactRoll = Math.max(-0.32, Math.min(0.32, -localSide * 1.4))
           ai.headReactPitch = Math.max(-0.28, Math.min(0.28, -pdy * 1.2))
+          const dxA = ai.pos[0] - hRes.posArr[0]
+          const dzA = ai.pos[2] - hRes.posArr[2]
+          const dXZ = Math.hypot(dxA, dzA)
+          if (dXZ > 0.22) {
+            ai.followPullTargetXZ = [
+              hRes.posArr[0] + (dxA / dXZ) * 0.16,
+              hRes.posArr[2] + (dzA / dXZ) * 0.16,
+            ]
+          }
         }
       }
 

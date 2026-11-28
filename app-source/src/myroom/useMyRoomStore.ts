@@ -65,6 +65,7 @@ export interface MyRoomAIRuntime {
   velXZ: [number, number]
   hairWorldPos: [number, number, number]
   hairPullTarget: [number, number, number] | null
+  followPullTargetXZ: [number, number] | null
   heldHandByUser: 'left' | 'right' | null
   touchedShoulderSide: 'left' | 'right' | null
   lookTarget: [number, number, number] | null
@@ -87,6 +88,9 @@ export const myRoomRuntime = {
   darts: {
     readyDart: null as FlightDartState | null,
     flyingDarts: [] as FlightDartState[],
+    practiceDarts: [] as FlightDartState[],
+    pullingVisual: null as { throwIndex: number; pullOffsetM: number } | null,
+    boardGrabbedByLocal: false,
     lastThrowAtSec: -10,
   },
   leftWristPose: {
@@ -118,6 +122,7 @@ export const myRoomRuntime = {
     velXZ: [0, 0] as [number, number],
     hairWorldPos: [0, 1.62, -1.22] as [number, number, number],
     hairPullTarget: null,
+    followPullTargetXZ: null,
     heldHandByUser: null,
     touchedShoulderSide: null,
     lookTarget: null,
@@ -528,6 +533,7 @@ export interface MyRoomStoreState {
   startDartMatch: (boardPose: DartBoardPose, firstTurnId: string, broadcast?: boolean) => void
   stopDartMatch: (broadcast?: boolean) => void
   relocateDartboard: (boardPose: DartBoardPose, broadcast?: boolean) => void
+  pullDartRecord: (throwIndex: number, broadcast?: boolean) => void
   recordDartThrow: (
     record: DartThrowRecord,
     nextTurnOwnerId: string,
@@ -674,6 +680,9 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
   startDartMatch: (boardPose, firstTurnId, broadcast = true) => {
     myRoomRuntime.darts.readyDart = null
     myRoomRuntime.darts.flyingDarts = []
+    myRoomRuntime.darts.practiceDarts = []
+    myRoomRuntime.darts.pullingVisual = null
+    myRoomRuntime.darts.boardGrabbedByLocal = false
     myRoomRuntime.ai.dartAimTimerSec = 0
     myRoomRuntime.ai.dartDispatchedMatchThrowIdx = -1
     const nextState: DartGameUIState = {
@@ -699,6 +708,9 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
   stopDartMatch: (broadcast = true) => {
     myRoomRuntime.darts.readyDart = null
     myRoomRuntime.darts.flyingDarts = []
+    myRoomRuntime.darts.practiceDarts = []
+    myRoomRuntime.darts.pullingVisual = null
+    myRoomRuntime.darts.boardGrabbedByLocal = false
     myRoomRuntime.ai.dartAimTimerSec = 0
     myRoomRuntime.ai.dartDispatchedMatchThrowIdx = -1
     const nextState: DartGameUIState = {
@@ -720,9 +732,30 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
     const nextState: DartGameUIState = {
       ...get().dartGame,
       boardPose,
-      lastCallout: boardPose.mountedOnWall ? 'BOARD ON SCANNED WALL' : 'BOARD MOVED AHEAD',
+      lastCallout: boardPose.mountedOnWall ? 'BOARD ON SCANNED WALL' : 'BOARD PLACED BY HAND',
     }
     set({ dartGame: nextState })
+    if (broadcast) {
+      myRoomRuntime.onDartStateSend?.(buildDartStateSyncPayload(nextState))
+    }
+  },
+
+  pullDartRecord: (throwIndex, broadcast = true) => {
+    const cur = get().dartGame
+    const target = cur.throws[throwIndex]
+    if (!target || target.pulled) return
+    const nextThrows = cur.throws.map((t, i) => (i === throwIndex ? { ...t, pulled: true } : t))
+    const nextState: DartGameUIState = {
+      ...cur,
+      throws: nextThrows,
+      lastCallout: target.stuck ? `PULLED ${target.label} DART FREE` : 'PICKED UP FALLEN DART',
+    }
+    set({
+      dartGame: nextState,
+      statusHint: target.stuck
+        ? 'Pulled dart off dartboard — hold 3 fingers to aim & throw!'
+        : 'Picked up dart from floor — aim & throw!',
+    })
     if (broadcast) {
       myRoomRuntime.onDartStateSend?.(buildDartStateSyncPayload(nextState))
     }
@@ -822,11 +855,15 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
     myRoomRuntime.roomBoundsXZ = { minX: -3.5, maxX: 3.5, minZ: -3.5, maxZ: 3.5 }
     myRoomRuntime.darts.readyDart = null
     myRoomRuntime.darts.flyingDarts = []
+    myRoomRuntime.darts.practiceDarts = []
+    myRoomRuntime.darts.pullingVisual = null
+    myRoomRuntime.darts.boardGrabbedByLocal = false
     myRoomRuntime.ai.holdingObjId = null
     myRoomRuntime.ai.yaw = Math.PI
     myRoomRuntime.ai.baseFrontYaw = Math.PI
     myRoomRuntime.ai.initializedNearUser = false
     myRoomRuntime.ai.pullToUserActive = false
+    myRoomRuntime.ai.followPullTargetXZ = null
     myRoomRuntime.ai.collectedIds = []
     myRoomRuntime.ai.targetObjId = null
     myRoomRuntime.ai.hairPullTarget = null

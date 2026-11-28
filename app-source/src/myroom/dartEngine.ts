@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { clampInsideRoomWalls } from './roomPhysics'
+import { clampInsideRoomWalls, findSupportingSurfaceY } from './roomPhysics'
 import { DARTBOARD_RADIUS, DartBoardPose, RoomSurfaceCollider } from './types'
 
 // Official clock-face dartboard sector sequence clockwise starting from 12 o'clock (top)
@@ -14,6 +14,8 @@ export interface FlightDartState {
   thrower: 'local' | 'opponent'
   throwerId: string
   throwIndex: number
+  isPractice?: boolean
+  stuckOnBoardLocal?: [number, number]
   inFlight: boolean
   settled: boolean
   flightTimeSec: number
@@ -164,16 +166,87 @@ export function findDartboardPlacement(
 const _fwd = new THREE.Vector3(0, 0, -1)
 const _velVec = new THREE.Vector3()
 const _alignQ = new THREE.Quaternion()
+const _restEuler = new THREE.Euler(0, 0, 0, 'YXZ')
+
+/**
+ * Places a hand-carried dartboard at `desiredPos`, snapping flush onto any scanned room wall
+ * within 26cm or orienting on a portable stand cleanly facing the player inside room bounds.
+ */
+export function snapHandDartboardPose(
+  desiredPos: [number, number, number],
+  userHeadPos: [number, number, number],
+  surfaces: readonly RoomSurfaceCollider[],
+  floorY: number,
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number }
+): DartBoardPose {
+  const boardY = Math.max(floorY + 0.48, Math.min(floorY + 2.25, desiredPos[1]))
+
+  let bestWall: RoomSurfaceCollider | null = null
+  let bestWallDist = 0.28
+  let bestWallPoint: [number, number] | null = null
+  let bestWallNormal: [number, number] = [0, 1]
+
+  for (let i = 0; i < surfaces.length; i++) {
+    const s = surfaces[i]
+    if (s.orientation !== 'vertical') continue
+    if (s.label !== 'wall' && s.halfU < 0.32) continue
+
+    const toUserX = userHeadPos[0] - s.center[0]
+    const toUserZ = userHeadPos[2] - s.center[2]
+    const inwardSign = toUserX * s.normal[0] + toUserZ * s.normal[2] >= 0 ? 1 : -1
+    const nx = s.normal[0] * inwardSign
+    const nz = s.normal[2] * inwardSign
+
+    const relX = desiredPos[0] - s.center[0]
+    const relZ = desiredPos[2] - s.center[2]
+    const perpDist = relX * nx + relZ * nz
+    const alongU = relX * s.uAxis[0] + relZ * s.uAxis[2]
+
+    if (perpDist > -0.14 && perpDist < bestWallDist && Math.abs(alongU) <= s.halfU + 0.14) {
+      bestWallDist = Math.abs(perpDist)
+      bestWall = s
+      const clampedU = Math.max(-s.halfU * 0.72, Math.min(s.halfU * 0.72, alongU))
+      bestWallPoint = [
+        s.center[0] + s.uAxis[0] * clampedU + nx * 0.032,
+        s.center[2] + s.uAxis[2] * clampedU + nz * 0.032,
+      ]
+      bestWallNormal = [nx, nz]
+    }
+  }
+
+  if (bestWall && bestWallPoint) {
+    return {
+      pos: [bestWallPoint[0], boardY, bestWallPoint[1]],
+      normal: [bestWallNormal[0], 0, bestWallNormal[1]],
+      yaw: Math.atan2(bestWallNormal[0], bestWallNormal[1]),
+      mountedOnWall: true,
+    }
+  }
+
+  const [cx, cz] = clampInsideRoomWalls(desiredPos[0], desiredPos[2], 0.28, surfaces, bounds)
+  const toUserX = userHeadPos[0] - cx
+  const toUserZ = userHeadPos[2] - cz
+  const len = Math.hypot(toUserX, toUserZ) || 1
+  const nx = toUserX / len
+  const nz = toUserZ / len
+  return {
+    pos: [cx, boardY, cz],
+    normal: [nx, 0, nz],
+    yaw: Math.atan2(nx, nz),
+    mountedOnWall: false,
+  }
+}
 
 /**
  * Steps a flying steel-tip dart with aerodynamic nose alignment, checks exact dartboard plane impact,
- * and handles floor/wall misses cleanly.
+ * and settles missed darts persistently onto the floor or any horizontal plane surface without vanishing.
  */
 export function stepFlightDart(
   dart: FlightDartState,
   boardPose: DartBoardPose,
   floorY: number,
-  dt: number
+  dt: number,
+  surfaces: readonly RoomSurfaceCollider[] = []
 ):
   | { status: 'flying' }
   | { status: 'board-hit'; localX: number; localY: number; evalHit: DartHitEval }
@@ -213,7 +286,7 @@ export function stepFlightDart(
     (dart.pos[1] - boardPose.pos[1]) * bnY +
     (dart.pos[2] - boardPose.pos[2]) * bnZ
 
-  if (dPrev >= -0.025 && dCurr <= 0.015 && (dPrev - dCurr) > 1e-4) {
+  if (dPrev >= -0.025 && dCurr <= 0.015 && dPrev - dCurr > 1e-4) {
     const tCross = Math.max(0, Math.min(1, dPrev / (dPrev - dCurr)))
     const hx = dart.prevPos[0] + (dart.pos[0] - dart.prevPos[0]) * tCross
     const hy = dart.prevPos[1] + (dart.pos[1] - dart.prevPos[1]) * tCross
@@ -242,13 +315,25 @@ export function stepFlightDart(
     }
   }
 
-  // Miss: hits floor or flies far / times out
+  // Deflect gently downward if dart passes behind board plane so it drops cleanly onto floor/plane
   const distFromBoard = Math.hypot(
     dart.pos[0] - boardPose.pos[0],
     dart.pos[1] - boardPose.pos[1],
     dart.pos[2] - boardPose.pos[2]
   )
-  if (dart.pos[1] <= floorY + 0.02 || dart.flightTimeSec > 2.4 || (dCurr < -0.55 && distFromBoard > 0.6)) {
+  if (dCurr < -0.22 && distFromBoard > 0.6 && dart.vel[2] !== 0) {
+    dart.vel[0] *= 0.25
+    dart.vel[2] *= 0.25
+  }
+
+  // Settle cleanly onto horizontal supporting surface plane (desk/table) or floor without vanishing
+  const sup = findSupportingSurfaceY(dart.pos[0], dart.pos[2], surfaces, floorY, dart.prevPos[1] + 0.04)
+  if (dart.pos[1] <= sup.y + 0.014 || dart.flightTimeSec > 3.6) {
+    const travelYaw = Math.atan2(-(dart.vel[0] || 0), -(dart.vel[2] || -1))
+    _restEuler.set(0.05, travelYaw, 0, 'YXZ')
+    _alignQ.setFromEuler(_restEuler)
+    dart.pos[1] = sup.y + 0.014
+    dart.quat = [_alignQ.x, _alignQ.y, _alignQ.z, _alignQ.w]
     dart.inFlight = false
     dart.settled = true
     dart.vel = [0, 0, 0]

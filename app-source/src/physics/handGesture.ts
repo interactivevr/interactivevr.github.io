@@ -48,6 +48,7 @@ export const HAND_BONE_SEGMENTS: ReadonlyArray<readonly [XRHandJoint, XRHandJoin
   ['index-finger-metacarpal', 'middle-finger-metacarpal', 0.01],
   ['middle-finger-metacarpal', 'ring-finger-metacarpal', 0.01],
   ['ring-finger-metacarpal', 'pinky-finger-metacarpal', 0.009],
+  ['thumb-metacarpal', 'index-finger-metacarpal', 0.01],
   ['index-finger-phalanx-proximal', 'pinky-finger-phalanx-proximal', 0.008],
   // Thumb
   ['thumb-metacarpal', 'thumb-phalanx-proximal', 0.01],
@@ -82,6 +83,10 @@ export interface HandFrameAnalysis {
   wristWorldPos?: [number, number, number]
   wristWorldQuat?: [number, number, number, number]
   indexTipWorldPos?: [number, number, number]
+  /** 3-finger dart pinch midpoint (thumb + index + middle) in world coordinates */
+  dartGripPos?: [number, number, number]
+  /** Forward-aiming quaternion aligning dart -Z sharp needle straight ahead of the 3-finger grip */
+  dartAimQuat?: [number, number, number, number]
   curls: [number, number, number, number, number] // thumb, index, middle, ring, pinky (0..1)
   pinchDist: number
   isGrabbing: boolean
@@ -110,6 +115,12 @@ const _indexBase = new THREE.Vector3()
 const _middleBase = new THREE.Vector3()
 const _ringBase = new THREE.Vector3()
 const _pinkyBase = new THREE.Vector3()
+const _dartGrip = new THREE.Vector3()
+const _dartAimFwd = new THREE.Vector3()
+const _dartAimUp = new THREE.Vector3()
+const _dartAimRight = new THREE.Vector3()
+const _dartAimMat = new THREE.Matrix4()
+const _dartAimQuat = new THREE.Quaternion()
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v
@@ -207,7 +218,44 @@ export function analyzeXRHandFrame(
     originObject.getWorldQuaternion(_originQuat)
     _quat.premultiply(_originQuat)
     _indexTip.applyMatrix4(originObject.matrixWorld)
+    _thumbTip.applyMatrix4(originObject.matrixWorld)
+    _middleTip.applyMatrix4(originObject.matrixWorld)
+    _indexBase.applyMatrix4(originObject.matrixWorld)
+    _middleBase.applyMatrix4(originObject.matrixWorld)
+    _wristPos.applyMatrix4(originObject.matrixWorld)
   }
+
+  // Compute authentic 3-finger dart grip anchor (Thumb + Index + Middle tips) and forward aim axis (-Z needle tip ahead)
+  _dartGrip
+    .copy(_thumbTip)
+    .multiplyScalar(0.36)
+    .addScaledVector(_indexTip, 0.38)
+    .addScaledVector(_middleTip, 0.26)
+
+  _dartAimFwd
+    .copy(_dartGrip)
+    .sub(
+      _dartAimUp
+        .copy(_wristPos)
+        .multiplyScalar(0.45)
+        .addScaledVector(_indexBase, 0.3)
+        .addScaledVector(_middleBase, 0.25)
+    )
+  if (_dartAimFwd.lengthSq() < 1e-5) {
+    _dartAimFwd.set(0, 0, -1).applyQuaternion(_quat)
+  }
+  _dartAimFwd.normalize()
+  // Align barrel forward (+0.018m) so the sharp steel needle extends clearly in front of pinched fingers
+  _dartGrip.addScaledVector(_dartAimFwd, 0.018)
+
+  _dartAimUp.set(0, 1, 0).applyQuaternion(_quat).normalize()
+  _dartAimRight.crossVectors(_dartAimFwd, _dartAimUp)
+  if (_dartAimRight.lengthSq() < 1e-4) _dartAimRight.set(1, 0, 0)
+  _dartAimRight.normalize()
+  _dartAimUp.crossVectors(_dartAimRight, _dartAimFwd).normalize()
+  // SteelTipDartMesh needle points along local -Z, so Z-axis = -_dartAimFwd
+  _dartAimMat.makeBasis(_dartAimRight, _dartAimUp, _dartAimFwd.clone().negate())
+  _dartAimQuat.setFromRotationMatrix(_dartAimMat)
 
   // Extract anatomical wrist pose for smartwatch mounting
   const wristOffset = HAND_JOINT_INDEX['wrist'] * 16
@@ -226,6 +274,8 @@ export function analyzeXRHandFrame(
     wristWorldPos: [wPos.x, wPos.y, wPos.z],
     wristWorldQuat: [wQuat.x, wQuat.y, wQuat.z, wQuat.w],
     indexTipWorldPos: [_indexTip.x, _indexTip.y, _indexTip.z],
+    dartGripPos: [_dartGrip.x, _dartGrip.y, _dartGrip.z],
+    dartAimQuat: [_dartAimQuat.x, _dartAimQuat.y, _dartAimQuat.z, _dartAimQuat.w],
     curls: [thumbCurl, indexCurl, middleCurl, ringCurl, pinkyCurl],
     pinchDist,
     isGrabbing,

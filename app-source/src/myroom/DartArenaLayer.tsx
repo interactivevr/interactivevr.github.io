@@ -6,7 +6,7 @@ import { TextLabel } from '../scene/TextLabel'
 import { useGameStore } from '../store/useGameStore'
 import { createDartboardCanvasTexture, stepFlightDart } from './dartEngine'
 import { DARTBOARD_RADIUS, DARTS_PER_PLAYER } from './types'
-import { myRoomRuntime, useMyRoomStore } from './useMyRoomStore'
+import { getCombinedRoomSurfaces, myRoomRuntime, useMyRoomStore } from './useMyRoomStore'
 
 /**
  * Renders a realistic steel-tip fletched dart (needle point facing -Z, knurled brass barrel, shaft & 4 flight fins).
@@ -110,6 +110,58 @@ function ReadyHandDartView() {
  * Renders wall/stand Bristle Dartboard, overhead live scoreboard, stuck darts,
  * aerodynamic in-flight darts, and coordinates hit detection + turn progression for AI or P2P Peer.
  */
+function StuckBoardDartView({
+  throwIndex,
+  localX,
+  localY,
+  color,
+}: {
+  throwIndex: number
+  localX: number
+  localY: number
+  color: string
+}) {
+  const grpRef = useRef<THREE.Group>(null)
+  useFrame(() => {
+    if (!grpRef.current) return
+    const pull = myRoomRuntime.darts.pullingVisual
+    const pullZ = pull && pull.throwIndex === throwIndex ? pull.pullOffsetM : 0
+    grpRef.current.position.set(localX, localY, 0.068 + pullZ)
+  })
+  return (
+    <group ref={grpRef} position={[localX, localY, 0.068]} rotation={[0.04, Math.PI, 0]}>
+      <SteelTipDartMesh color={color} />
+    </group>
+  )
+}
+
+function PracticeLooseDartsView() {
+  const [practiceIds, setPracticeIds] = useState<string[]>([])
+  const sigRef = useRef('')
+
+  useFrame(() => {
+    const sig = myRoomRuntime.darts.practiceDarts.map((d) => d.id).join('|')
+    if (sig !== sigRef.current) {
+      sigRef.current = sig
+      setPracticeIds(myRoomRuntime.darts.practiceDarts.map((d) => d.id))
+    }
+  })
+
+  return (
+    <>
+      {practiceIds.map((id) => {
+        const d = myRoomRuntime.darts.practiceDarts.find((x) => x.id === id)
+        if (!d || d.stuckOnBoardLocal) return null
+        return (
+          <group key={d.id} position={d.pos} quaternion={d.quat}>
+            <SteelTipDartMesh color="#38bdf8" />
+          </group>
+        )
+      })}
+    </>
+  )
+}
+
 export function DartArenaLayer() {
   const dartGame = useMyRoomStore((s) => s.dartGame)
   const showAiOpponent = useMyRoomStore((s) => s.showAiOpponent)
@@ -118,7 +170,12 @@ export function DartArenaLayer() {
   const localPeerId = useGameStore((s) => s.localPeerId)
 
   const [flightRenderIds, setFlightRenderIds] = useState<string[]>([])
+  const [practiceBoardList, setPracticeBoardList] = useState<
+    Array<{ id: string; localX: number; localY: number }>
+  >([])
   const lastIdsSigRef = useRef('')
+  const lastPracticeBoardSigRef = useRef('')
+  const boardRimRef = useRef<THREE.Mesh>(null)
 
   const boardTex = useMemo(() => createDartboardCanvasTexture(), [])
   useEffect(() => {
@@ -132,26 +189,59 @@ export function DartArenaLayer() {
     const dg = st.dartGame
     if (!dg.active) return
 
+    if (boardRimRef.current) {
+      boardRimRef.current.visible = myRoomRuntime.darts.boardGrabbedByLocal
+    }
+
     const peerIds = Object.keys(useGameStore.getState().peers)
     const hasHumanPeers = peerIds.length > 0
     const aiPresent =
       st.showAiOpponent && (st.opponentMode === 'computer' || (st.opponentMode === 'auto' && !hasHumanPeers))
     const hasOpponent = hasHumanPeers || aiPresent
     const myId = useGameStore.getState().localPeerId || 'local'
+    const combinedSurfaces = getCombinedRoomSurfaces()
 
-    // Track flight IDs reactively only when list changes
+    // Track flight & practice board-stuck IDs reactively only when list changes
     const curSig = myRoomRuntime.darts.flyingDarts.map((d) => `${d.id}:${d.inFlight ? 1 : 0}`).join('|')
     if (curSig !== lastIdsSigRef.current) {
       lastIdsSigRef.current = curSig
       setFlightRenderIds(myRoomRuntime.darts.flyingDarts.map((d) => d.id))
+    }
+    const pbItems = myRoomRuntime.darts.practiceDarts.filter((d) => d.stuckOnBoardLocal)
+    const pbSig = pbItems.map((d) => d.id).join('|')
+    if (pbSig !== lastPracticeBoardSigRef.current) {
+      lastPracticeBoardSigRef.current = pbSig
+      setPracticeBoardList(
+        pbItems.map((d) => ({
+          id: d.id,
+          localX: d.stuckOnBoardLocal![0],
+          localY: d.stuckOnBoardLocal![1],
+        }))
+      )
     }
 
     for (let i = myRoomRuntime.darts.flyingDarts.length - 1; i >= 0; i--) {
       const dart = myRoomRuntime.darts.flyingDarts[i]
       if (!dart.inFlight || dart.settled) continue
 
-      const step = stepFlightDart(dart, dg.boardPose, myRoomRuntime.floorY, delta)
+      const step = stepFlightDart(dart, dg.boardPose, myRoomRuntime.floorY, delta, combinedSurfaces)
       if (step.status === 'flying') continue
+
+      // Practice / re-thrown pulled darts persist cleanly on board or floor without altering official scorecard
+      if (dart.isPractice) {
+        if (step.status === 'board-hit') {
+          playMaterialActionSfx(
+            'wood',
+            step.evalHit.score >= 50 || step.evalHit.isHighValue ? 'dart_bullseye' : 'dart_hit'
+          )
+          dart.stuckOnBoardLocal = [step.localX, step.localY]
+        } else {
+          playMaterialActionSfx('wood', 'dart_miss')
+        }
+        myRoomRuntime.darts.practiceDarts.push(dart)
+        myRoomRuntime.darts.flyingDarts.splice(i, 1)
+        continue
+      }
 
       // Peer's remote dart visualization just finished locally; peer already owns the authoritative score message
       if (dart.throwerId !== myId && dart.throwerId !== 'ai') {
@@ -178,6 +268,8 @@ export function DartArenaLayer() {
             localX: 99,
             localY: 99,
             stuck: false,
+            worldPos: [...dart.pos] as [number, number, number],
+            worldQuat: [...dart.quat] as [number, number, number, number],
           }
 
       if (isHit) {
@@ -226,7 +318,7 @@ export function DartArenaLayer() {
         })
       }
 
-      // Remove flying temp instance once logged onto board
+      // Remove temporary flying object once logged onto board or persisted on floor/plane
       myRoomRuntime.darts.flyingDarts.splice(i, 1)
     }
   })
@@ -261,24 +353,35 @@ export function DartArenaLayer() {
           <meshStandardMaterial color="#0f172a" roughness={0.6} metalness={0.2} />
         </mesh>
 
+        {/* Subtle active-carry rim outline when user grabs/moves the dartboard */}
+        <mesh ref={boardRimRef} position={[0, 0, 0.002]} visible={false}>
+          <ringGeometry args={[DARTBOARD_RADIUS + 0.012, DARTBOARD_RADIUS + 0.026, 40]} />
+          <meshBasicMaterial color="#34d399" side={THREE.DoubleSide} transparent opacity={0.85} />
+        </mesh>
+
         {/* Front 1024x1024 Bristle Face (local +Z faces toward thrower along boardPose.normal) */}
         <mesh position={[0, 0, 0.001]} receiveShadow>
           <circleGeometry args={[DARTBOARD_RADIUS, 40]} />
           <meshStandardMaterial map={boardTex} roughness={0.82} />
         </mesh>
 
-        {/* Stuck Darts pinned accurately at exact hit offsets */}
+        {/* Stuck Darts pinned accurately at exact hit offsets (live slide out while pulled by hand) */}
         {dartThrows.map((rec, idx) =>
-          rec.stuck ? (
-            <group
+          rec.stuck && !rec.pulled ? (
+            <StuckBoardDartView
               key={`${rec.throwerId}_${idx}`}
-              position={[rec.localX, rec.localY, 0.068]}
-              rotation={[0.04, Math.PI, 0]}
-            >
-              <SteelTipDartMesh color={rec.thrower === 'local' ? '#38bdf8' : '#fb7185'} />
-            </group>
+              throwIndex={idx}
+              localX={rec.localX}
+              localY={rec.localY}
+              color={rec.thrower === 'local' ? '#38bdf8' : '#fb7185'}
+            />
           ) : null
         )}
+        {practiceBoardList.map((pb) => (
+          <group key={pb.id} position={[pb.localX, pb.localY, 0.068]} rotation={[0.04, Math.PI, 0]}>
+            <SteelTipDartMesh color="#38bdf8" />
+          </group>
+        ))}
 
         {/* Portable Tripod Stand when not mounted directly against a scanned room wall */}
         {!boardPose.mountedOnWall && (
@@ -328,6 +431,20 @@ export function DartArenaLayer() {
           </TextLabel>
         </group>
       </group>
+
+      {/* Persistent Fallen Darts resting on the Floor / Supporting Surface Planes */}
+      {dartThrows.map((rec, idx) =>
+        !rec.stuck && !rec.pulled && rec.worldPos ? (
+          <group
+            key={`fallen_${rec.throwerId}_${idx}`}
+            position={rec.worldPos}
+            quaternion={rec.worldQuat ?? [0, 0, 0, 1]}
+          >
+            <SteelTipDartMesh color={rec.thrower === 'local' ? '#38bdf8' : '#fb7185'} />
+          </group>
+        ) : null
+      )}
+      <PracticeLooseDartsView />
 
       {/* Active Ready Dart & All Flying Darts */}
       <ReadyHandDartView />

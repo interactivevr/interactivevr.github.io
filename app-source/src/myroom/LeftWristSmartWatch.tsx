@@ -2,22 +2,23 @@ import { useFrame } from '@react-three/fiber'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { playMaterialActionSfx } from '../audio/myroomSfx'
-import { TextLabel } from '../scene/TextLabel'
-import { runtimeState } from '../store/useGameStore'
+import { runtimeState, useGameStore } from '../store/useGameStore'
+import { ARIconKind, getWristTileTexture } from './arIconCanvas'
 import { WristToolKind } from './types'
 import { myRoomRuntime, useMyRoomStore } from './useMyRoomStore'
 
 const WATCH_TOOLS: ReadonlyArray<{
   id: WristToolKind
   label: string
+  icon: ARIconKind
   color: string
   offset: [number, number, number]
 }> = [
-  { id: 'pen', label: 'PEN', color: '#2563eb', offset: [-0.072, 0.056, 0.025] },
-  { id: 'knife', label: 'KNIFE', color: '#dc2626', offset: [0, 0.056, 0.025] },
-  { id: 'axe', label: 'AXE', color: '#d97706', offset: [0.072, 0.056, 0.025] },
-  { id: 'tester', label: 'TESTER', color: '#eab308', offset: [-0.036, 0.014, 0.025] },
-  { id: 'none', label: 'HANDS', color: '#475569', offset: [0.036, 0.014, 0.025] },
+  { id: 'pen', label: 'PEN', icon: 'pen', color: '#2563eb', offset: [-0.06, 0.044, 0.02] },
+  { id: 'knife', label: 'KNIFE', icon: 'knife', color: '#dc2626', offset: [-0.02, 0.044, 0.02] },
+  { id: 'axe', label: 'AXE', icon: 'axe', color: '#d97706', offset: [0.02, 0.044, 0.02] },
+  { id: 'tester', label: 'TESTER', icon: 'tester', color: '#eab308', offset: [0.06, 0.044, 0.02] },
+  { id: 'none', label: 'HANDS', icon: 'hands', color: '#475569', offset: [-0.06, 0.004, 0.02] },
 ]
 
 const INK_COLORS = ['#1e3a8a', '#0f172a', '#dc2626', '#15803d'] as const
@@ -70,6 +71,7 @@ export function LeftWristSmartWatch() {
   const activeInkColor = useMyRoomStore((s) => s.activeInkColor)
   const testerReadout = useMyRoomStore((s) => s.testerReadout)
   const testerIsLive = useMyRoomStore((s) => s.testerIsLive)
+  const vrMenuVisible = useGameStore((s) => s.vrMenuVisible)
 
   const watchRootRef = useRef<THREE.Group>(null)
   const faceMeshRef = useRef<THREE.Mesh>(null)
@@ -192,7 +194,7 @@ export function LeftWristSmartWatch() {
         if (!mesh) continue
         mesh.getWorldPosition(_btnWorld)
         const d = Math.hypot(pokePos[0] - _btnWorld.x, pokePos[1] - _btnWorld.y, pokePos[2] - _btnWorld.z)
-        if (d < 0.044) {
+        if (d < 0.03) {
           lastTapMsRef.current = nowMs
           selectTool(item.id)
           return
@@ -203,12 +205,36 @@ export function LeftWristSmartWatch() {
       if (inkBtn) {
         inkBtn.getWorldPosition(_btnWorld)
         const d = Math.hypot(pokePos[0] - _btnWorld.x, pokePos[1] - _btnWorld.y, pokePos[2] - _btnWorld.z)
-        if (d < 0.04) {
+        if (d < 0.028) {
           lastTapMsRef.current = nowMs
           const cur = useMyRoomStore.getState().activeInkColor
           const idx = INK_COLORS.indexOf(cur as (typeof INK_COLORS)[number])
           const next = INK_COLORS[(idx + 1) % INK_COLORS.length]
           useMyRoomStore.getState().setActiveInkColor(next)
+          playMaterialActionSfx('metal', 'watch_tap')
+          return
+        }
+      }
+
+      const menuToggleBtn = buttonMeshRefs.current['toggle_menu']
+      if (menuToggleBtn) {
+        menuToggleBtn.getWorldPosition(_btnWorld)
+        const d = Math.hypot(pokePos[0] - _btnWorld.x, pokePos[1] - _btnWorld.y, pokePos[2] - _btnWorld.z)
+        if (d < 0.03) {
+          lastTapMsRef.current = nowMs
+          useGameStore.getState().toggleVrMenu()
+          playMaterialActionSfx('metal', 'watch_tap')
+          return
+        }
+      }
+
+      const closeDockBtn = buttonMeshRefs.current['close_dock']
+      if (closeDockBtn) {
+        closeDockBtn.getWorldPosition(_btnWorld)
+        const d = Math.hypot(pokePos[0] - _btnWorld.x, pokePos[1] - _btnWorld.y, pokePos[2] - _btnWorld.z)
+        if (d < 0.028) {
+          lastTapMsRef.current = nowMs
+          useMyRoomStore.getState().setWatchMenuOpen(false)
           playMaterialActionSfx('metal', 'watch_tap')
           return
         }
@@ -264,71 +290,119 @@ export function LeftWristSmartWatch() {
         <meshBasicMaterial map={screenCanvas.tex} />
       </mesh>
 
-      {/* Floating Machinery Selection Drawer Above Watch */}
+      {/* Compact Floating Wrist Dock: Sleek Icon Badges + Main Menu Show/Hide Toggle */}
       {watchMenuOpen && (
-        <group position={[0, 0.068, -0.015]} rotation={[-0.45, 0, 0]}>
-          <mesh position={[0, 0.032, -0.004]}>
-            <boxGeometry args={[0.225, 0.095, 0.006]} />
-            <meshStandardMaterial color="#0b1220" transparent opacity={0.92} roughness={0.4} />
+        <group position={[0, 0.062, -0.012]} rotation={[-0.45, 0, 0]}>
+          <mesh position={[0, 0.024, 0.008]}>
+            <boxGeometry args={[0.172, 0.086, 0.004]} />
+            <meshStandardMaterial color="#0b1220" transparent opacity={0.92} roughness={0.35} />
           </mesh>
 
           {WATCH_TOOLS.map((item) => {
             const isSelected = activeTool === item.id
             const isHovered = hoveredBtn === item.id
+            const tileTex = getWristTileTexture(item.label, item.icon, item.color, isSelected, isHovered)
             return (
-              <group key={item.id} position={item.offset}>
-                <mesh
-                  ref={(el) => {
-                    buttonMeshRefs.current[item.id] = el
-                  }}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    selectTool(item.id)
-                  }}
-                  onPointerOver={(e) => {
-                    e.stopPropagation()
-                    setHoveredBtn(item.id)
-                  }}
-                  onPointerOut={() => setHoveredBtn(null)}
-                >
-                  <boxGeometry args={[0.062, 0.034, 0.012]} />
-                  <meshStandardMaterial
-                    color={isSelected ? '#ffffff' : item.color}
-                    emissive={item.color}
-                    emissiveIntensity={isSelected ? 0.9 : isHovered ? 0.65 : 0.3}
-                  />
-                </mesh>
-                <TextLabel
-                  position={[0, 0, 0.008]}
-                  fontSize={0.0115}
-                  color={isSelected ? '#0f172a' : '#f8fafc'}
-                >
-                  {item.label}
-                </TextLabel>
-              </group>
+              <mesh
+                key={item.id}
+                position={item.offset}
+                ref={(el) => {
+                  buttonMeshRefs.current[item.id] = el
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  selectTool(item.id)
+                }}
+                onPointerOver={(e) => {
+                  e.stopPropagation()
+                  setHoveredBtn(item.id)
+                }}
+                onPointerOut={() => setHoveredBtn(null)}
+              >
+                <planeGeometry args={[0.036, 0.036]} />
+                <meshBasicMaterial map={tileTex} transparent />
+              </mesh>
             )
           })}
 
-          {/* Ink Color Switcher when Pen or drawer open */}
-          <group position={[0, 0.094, 0.025]}>
-            <mesh
-              ref={(el) => {
-                buttonMeshRefs.current['ink_next'] = el
-              }}
-              onClick={(e) => {
-                e.stopPropagation()
-                const idx = INK_COLORS.indexOf(activeInkColor as (typeof INK_COLORS)[number])
-                useMyRoomStore.getState().setActiveInkColor(INK_COLORS[(idx + 1) % INK_COLORS.length])
-                playMaterialActionSfx('metal', 'watch_tap')
-              }}
-            >
-              <boxGeometry args={[0.14, 0.022, 0.01]} />
-              <meshStandardMaterial color={activeInkColor} emissive={activeInkColor} emissiveIntensity={0.35} />
-            </mesh>
-            <TextLabel position={[0, 0, 0.007]} fontSize={0.01} color="#f8fafc">
-              INK COLOR
-            </TextLabel>
-          </group>
+          {/* Ink Color Picker Tile */}
+          <mesh
+            position={[-0.02, 0.004, 0.02]}
+            ref={(el) => {
+              buttonMeshRefs.current['ink_next'] = el
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              const idx = INK_COLORS.indexOf(activeInkColor as (typeof INK_COLORS)[number])
+              useMyRoomStore.getState().setActiveInkColor(INK_COLORS[(idx + 1) % INK_COLORS.length])
+              playMaterialActionSfx('metal', 'watch_tap')
+            }}
+            onPointerOver={(e) => {
+              e.stopPropagation()
+              setHoveredBtn('ink_next')
+            }}
+            onPointerOut={() => setHoveredBtn(null)}
+          >
+            <planeGeometry args={[0.036, 0.036]} />
+            <meshBasicMaterial
+              map={getWristTileTexture('INK', 'ink', activeInkColor, false, hoveredBtn === 'ink_next')}
+              transparent
+            />
+          </mesh>
+
+          {/* Show / Hide Main Menu Board Toggle (Accessible directly during Hand Tracking) */}
+          <mesh
+            position={[0.02, 0.004, 0.02]}
+            ref={(el) => {
+              buttonMeshRefs.current['toggle_menu'] = el
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              useGameStore.getState().toggleVrMenu()
+              playMaterialActionSfx('metal', 'watch_tap')
+            }}
+            onPointerOver={(e) => {
+              e.stopPropagation()
+              setHoveredBtn('toggle_menu')
+            }}
+            onPointerOut={() => setHoveredBtn(null)}
+          >
+            <planeGeometry args={[0.036, 0.036]} />
+            <meshBasicMaterial
+              map={getWristTileTexture(
+                vrMenuVisible ? 'HIDE' : 'MENU',
+                'menu',
+                '#0ea5e9',
+                vrMenuVisible,
+                hoveredBtn === 'toggle_menu'
+              )}
+              transparent
+            />
+          </mesh>
+
+          {/* Compact Close Wrist Dock Button */}
+          <mesh
+            position={[0.06, 0.004, 0.02]}
+            ref={(el) => {
+              buttonMeshRefs.current['close_dock'] = el
+            }}
+            onClick={(e) => {
+              e.stopPropagation()
+              useMyRoomStore.getState().setWatchMenuOpen(false)
+              playMaterialActionSfx('metal', 'watch_tap')
+            }}
+            onPointerOver={(e) => {
+              e.stopPropagation()
+              setHoveredBtn('close_dock')
+            }}
+            onPointerOut={() => setHoveredBtn(null)}
+          >
+            <planeGeometry args={[0.036, 0.036]} />
+            <meshBasicMaterial
+              map={getWristTileTexture('CLOSE', 'close', '#64748b', false, hoveredBtn === 'close_dock')}
+              transparent
+            />
+          </mesh>
         </group>
       )}
     </group>

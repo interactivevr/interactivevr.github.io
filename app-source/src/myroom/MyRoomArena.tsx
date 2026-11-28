@@ -8,6 +8,7 @@ import { TextLabel } from '../scene/TextLabel'
 import { runtimeState, useGameStore } from '../store/useGameStore'
 import { PeerInfo } from '../types/game'
 import { xrStore } from '../xr/xrStore'
+import { ARIconKind, getARPanelButtonTexture } from './arIconCanvas'
 import { CraftObjectsLayer } from './CraftObjectMesh'
 import { DartArenaLayer } from './DartArenaLayer'
 import { computeAIDartThrowVelocity, findDartboardPlacement } from './dartEngine'
@@ -216,17 +217,22 @@ function ComputerAROpponentAvatar() {
 function ARStudioButton({
   position,
   label,
+  icon,
   color,
-  width = 0.28,
+  width = 0.17,
+  height = 0.06,
   onClick,
 }: {
   position: [number, number, number]
   label: string
+  icon: ARIconKind
   color: string
   width?: number
+  height?: number
   onClick: () => void
 }) {
   const [hovered, setHovered] = useState(false)
+  const tex = getARPanelButtonTexture(label, icon, color, hovered, width / height)
   return (
     <group position={position}>
       <mesh
@@ -240,16 +246,9 @@ function ARStudioButton({
         }}
         onPointerOut={() => setHovered(false)}
       >
-        <boxGeometry args={[width, 0.085, 0.022]} />
-        <meshStandardMaterial
-          color={hovered ? '#ffffff' : color}
-          emissive={color}
-          emissiveIntensity={hovered ? 0.65 : 0.28}
-        />
+        <planeGeometry args={[width, height]} />
+        <meshBasicMaterial map={tex} transparent />
       </mesh>
-      <TextLabel position={[0, 0, 0.015]} fontSize={0.025} color={hovered ? '#0f172a' : '#f8fafc'}>
-        {label}
-      </TextLabel>
     </group>
   )
 }
@@ -365,75 +364,54 @@ function InARCraftStudioPanel() {
 
   return (
     <group position={panelPoseRef.current.pos} rotation={[0, panelPoseRef.current.yaw, 0]}>
-      <mesh position={[0, -0.05, 0]}>
-        <boxGeometry args={[1.06, 1.24, 0.025]} />
-        <meshStandardMaterial color="#0b1220" transparent opacity={0.92} roughness={0.5} />
+      {/* Sleek compact glassmorphic AR studio frame */}
+      <mesh position={[0, -0.03, 0]}>
+        <boxGeometry args={[0.78, 0.78, 0.014]} />
+        <meshStandardMaterial color="#090f1d" transparent opacity={0.9} roughness={0.38} metalness={0.18} />
       </mesh>
-      <TextLabel position={[0, 0.48, 0.018]} fontSize={0.032} color="#38bdf8">
-        {`MYROOM MR STUDIO  •  SURFACES: ${scannedCount}  •  OBJECTS: ${objectCount}  •  [B] HIDE`}
+      <mesh position={[0, 0.36, 0.008]}>
+        <boxGeometry args={[0.78, 0.008, 0.006]} />
+        <meshBasicMaterial color="#38bdf8" />
+      </mesh>
+      <TextLabel position={[-0.04, 0.325, 0.012]} fontSize={0.019} color="#38bdf8">
+        {`MYROOM STUDIO  •  SRF ${scannedCount}  •  OBJ ${objectCount}`}
       </TextLabel>
-      <TextLabel position={[0, 0.42, 0.018]} fontSize={0.021} color="#fde047">
-        {statusHint || 'Pinch to Carry • Fold Paper • Tap Watch Tools • Play 6 Darts!'}
-      </TextLabel>
-
-      {/* Row 1: Squeezeable / Foldable Craft Materials */}
       <ARStudioButton
-        position={[-0.31, 0.31, 0.016]}
-        label="+ CLAY (0.7kg)"
-        color="#c2410c"
-        onClick={() => spawnInRoom('clay', 'sphere')}
-      />
-      <ARStudioButton
-        position={[0, 0.31, 0.016]}
-        label="+ PAPER (15g)"
-        color="#0284c7"
-        onClick={() => spawnInRoom('paper', 'sheet')}
-      />
-      <ARStudioButton
-        position={[0.31, 0.31, 0.016]}
-        label="+ CLOTH (0.2kg)"
-        color="#dc2626"
-        onClick={() => spawnInRoom('cloth', 'towel')}
-      />
-
-      {/* Row 2: Heavy Rigid Building Materials (+ Thin Wide Wood Plate) & Companion Pull */}
-      <ARStudioButton
-        position={[-0.36, 0.2, 0.016]}
-        width={0.22}
-        label="+ WOOD BLK"
-        color="#92400e"
-        onClick={() => spawnInRoom('wood', 'block')}
-      />
-      <ARStudioButton
-        position={[-0.12, 0.2, 0.016]}
-        width={0.22}
-        label="+ WOOD PLATE"
-        color="#b45309"
-        onClick={() => spawnInRoom('wood', 'plate')}
-      />
-      <ARStudioButton
-        position={[0.12, 0.2, 0.016]}
-        width={0.22}
-        label="+ METAL BLK"
+        position={[0.31, 0.325, 0.012]}
+        width={0.12}
+        height={0.044}
+        icon="close"
+        label="HIDE"
         color="#475569"
-        onClick={() => spawnInRoom('metal', 'block')}
+        onClick={() => useGameStore.getState().setVrMenuVisible(false)}
       />
+      <TextLabel position={[0, 0.282, 0.012]} fontSize={0.0115} color="#fde047">
+        {(statusHint || 'Pinch to Pull Companion • Grab Board/Darts • Wrist Dock [B]').slice(0, 66)}
+      </TextLabel>
+
+      {/* Row 1: Craft Spawners (4 compact icon buttons) */}
+      <ARStudioButton position={[-0.27, 0.215, 0.012]} icon="clay" label="CLAY" color="#c2410c" onClick={() => spawnInRoom('clay', 'sphere')} />
+      <ARStudioButton position={[-0.09, 0.215, 0.012]} icon="paper" label="PAPER" color="#0284c7" onClick={() => spawnInRoom('paper', 'sheet')} />
+      <ARStudioButton position={[0.09, 0.215, 0.012]} icon="cloth" label="CLOTH" color="#dc2626" onClick={() => spawnInRoom('cloth', 'towel')} />
+      <ARStudioButton position={[0.27, 0.215, 0.012]} icon="wood" label="WOOD" color="#92400e" onClick={() => spawnInRoom('wood', 'block')} />
+
+      {/* Row 2: Plate, Metal, Pull AI, Next Color */}
+      <ARStudioButton position={[-0.27, 0.145, 0.012]} icon="plate" label="PLATE" color="#b45309" onClick={() => spawnInRoom('wood', 'plate')} />
+      <ARStudioButton position={[-0.09, 0.145, 0.012]} icon="metal" label="METAL" color="#475569" onClick={() => spawnInRoom('metal', 'block')} />
       <ARStudioButton
-        position={[0.36, 0.2, 0.016]}
-        width={0.22}
-        label="PULL NEAR ME"
+        position={[0.09, 0.145, 0.012]}
+        icon="pull"
+        label="PULL AI"
         color="#0d9488"
         onClick={() => {
           myRoomRuntime.ai.pullToUserActive = true
           useMyRoomStore.getState().setStatusHint('Pulling companion back nearest to you!')
         }}
       />
-
-      {/* Row 3: Color, Room Scan, Hide/Show AI, AI Gender */}
       <ARStudioButton
-        position={[-0.36, 0.09, 0.016]}
-        width={0.22}
-        label="NEXT COLOR"
+        position={[0.27, 0.145, 0.012]}
+        icon="color"
+        label="COLOR"
         color={selectedColor}
         onClick={() => {
           const all = getAllPaletteColors()
@@ -441,50 +419,52 @@ function InARCraftStudioPanel() {
           useMyRoomStore.getState().setSelectedColor(next)
         }}
       />
+
+      {/* Row 3: Room Scan, AI Visibility, AI Gender, Mode */}
       <ARStudioButton
-        position={[-0.12, 0.09, 0.016]}
-        width={0.22}
-        label={showRoomMesh ? 'SCAN: ON' : 'SCAN: OFF'}
+        position={[-0.27, 0.075, 0.012]}
+        icon="scan"
+        label={showRoomMesh ? 'SCAN ON' : 'SCAN OFF'}
         color={showRoomMesh ? '#059669' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowRoomMesh(!showRoomMesh)}
       />
       <ARStudioButton
-        position={[0.12, 0.09, 0.016]}
-        width={0.22}
-        label={showAiOpponent ? 'AI: VISIBLE' : 'AI: HIDDEN'}
+        position={[-0.09, 0.075, 0.012]}
+        icon="ai"
+        label={showAiOpponent ? 'AI ON' : 'AI OFF'}
         color={showAiOpponent ? '#0284c7' : '#64748b'}
         onClick={() => useMyRoomStore.getState().setShowAiOpponent(!showAiOpponent)}
       />
       <ARStudioButton
-        position={[0.36, 0.09, 0.016]}
-        width={0.22}
-        label={`AI: ${aiGender.toUpperCase()}`}
+        position={[0.09, 0.075, 0.012]}
+        icon="gender"
+        label={aiGender === 'female' ? 'FEMALE' : 'MALE'}
         color="#db2777"
         onClick={() => useGameStore.getState().setAiAvatarGender(aiGender === 'male' ? 'female' : 'male')}
       />
-
-      {/* Row 4: Opponent Mode, AI Object Production Toggle, Remove Selected/Last, Clear All Created */}
       <ARStudioButton
-        position={[-0.36, -0.02, 0.016]}
-        width={0.22}
-        label={`MODE: ${opponentMode.toUpperCase()}`}
+        position={[0.27, 0.075, 0.012]}
+        icon="mode"
+        label={opponentMode.toUpperCase()}
         color="#6366f1"
         onClick={() => {
           const next = opponentMode === 'auto' ? 'computer' : opponentMode === 'computer' ? 'peer' : 'auto'
           useMyRoomStore.getState().setOpponentMode(next)
         }}
       />
+
+      {/* Row 4: AI Produce, Delete Object, Clear All, Wipe All */}
       <ARStudioButton
-        position={[-0.12, -0.02, 0.016]}
-        width={0.22}
-        label={aiCanProduceObjects ? 'AI PROD: ON' : 'AI PROD: OFF'}
+        position={[-0.27, 0.005, 0.012]}
+        icon="produce"
+        label={aiCanProduceObjects ? 'CRAFT ON' : 'CRAFT OFF'}
         color={aiCanProduceObjects ? '#059669' : '#475569'}
         onClick={() => useMyRoomStore.getState().setAiCanProduceObjects(!aiCanProduceObjects)}
       />
       <ARStudioButton
-        position={[0.12, -0.02, 0.016]}
-        width={0.22}
-        label={selectedCraftId ? 'DEL SEL OBJ' : 'DEL LAST OBJ'}
+        position={[-0.09, 0.005, 0.012]}
+        icon="delete"
+        label={selectedCraftId ? 'DEL SEL' : 'DEL LAST'}
         color="#ea580c"
         onClick={() => {
           const keys = Array.from(myRoomRuntime.objects.keys())
@@ -499,26 +479,31 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.36, -0.02, 0.016]}
-        width={0.22}
-        label="CLEAR ALL OBJS"
+        position={[0.09, 0.005, 0.012]}
+        icon="clear"
+        label="CLR OBJ"
         color="#d97706"
         onClick={() => {
           clearAllMyRoomObjects()
           useMyRoomStore.getState().setStatusHint('Removed all created craft objects!')
         }}
       />
-
-      {/* Row 5: 6-Dart AR Mini-Game (Play vs AI or Peer, Relocate Board, Quick Throw) */}
       <ARStudioButton
-        position={[-0.31, -0.13, 0.016]}
-        label={
-          dartGame.active
-            ? dartGame.finished
-              ? 'REMATCH DARTS'
-              : 'END 6 DARTS'
-            : 'PLAY 6 DARTS'
-        }
+        position={[0.27, 0.005, 0.012]}
+        icon="wipe"
+        label="WIPE ALL"
+        color="#9f1239"
+        onClick={() => {
+          clearAllCreatedRoomContent()
+          useMyRoomStore.getState().setStatusHint('Removed all created craft objects and room decor!')
+        }}
+      />
+
+      {/* Row 5: 6-Dart AR Mini-Game + Dressup */}
+      <ARStudioButton
+        position={[-0.27, -0.065, 0.012]}
+        icon="darts"
+        label={dartGame.active ? (dartGame.finished ? 'REMATCH' : 'END DARTS') : '6 DARTS'}
         color={dartGame.active && !dartGame.finished ? '#e11d48' : '#16a34a'}
         onClick={() => {
           const st = useMyRoomStore.getState()
@@ -530,8 +515,9 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0, -0.13, 0.016]}
-        label={dartGame.active ? 'MOVE BOARD' : '6 DARTS READY'}
+        position={[-0.09, -0.065, 0.012]}
+        icon="board"
+        label="MV BOARD"
         color={dartGame.active ? '#0891b2' : '#334155'}
         onClick={() => {
           if (useMyRoomStore.getState().dartGame.active) {
@@ -540,8 +526,9 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.31, -0.13, 0.016]}
-        label={dartGame.active ? 'THROW DART' : '6 DARTS VS AI/PEER'}
+        position={[0.09, -0.065, 0.012]}
+        icon="throw"
+        label="THROW"
         color={dartGame.active ? '#ca8a04' : '#334155'}
         onClick={() => {
           const st = useMyRoomStore.getState()
@@ -577,26 +564,37 @@ function InARCraftStudioPanel() {
           myRoomRuntime.darts.lastThrowAtSec = performance.now() / 1000
         }}
       />
-
-      {/* Row 6: Showcase Panel, Self Body, Mic & Wipe All Room Content */}
       <ARStudioButton
-        position={[-0.36, -0.25, 0.016]}
-        width={0.22}
-        label={showcaseOpen ? 'SHOWCASE: ON' : `SHOWCASE (${decorCount})`}
+        position={[0.27, -0.065, 0.012]}
+        icon="dress"
+        label={aiDressupStyle.toUpperCase()}
+        color={aiDressupStyle === 'sport' ? '#0284c7' : aiDressupStyle === 'nerdy' ? '#4338ca' : '#7d293b'}
+        onClick={() => {
+          const next =
+            aiDressupStyle === 'chic' ? 'nerdy' : aiDressupStyle === 'nerdy' ? 'sport' : 'chic'
+          useMyRoomStore.getState().setAiDressupStyle(next)
+        }}
+      />
+
+      {/* Row 6: Showcase, My Body, Mic, Lobby/Exit */}
+      <ARStudioButton
+        position={[-0.27, -0.135, 0.012]}
+        icon="showcase"
+        label={`DECOR (${decorCount})`}
         color={showcaseOpen ? '#eab308' : '#b45309'}
         onClick={() => useMyRoomStore.getState().setShowcaseOpen(!showcaseOpen)}
       />
       <ARStudioButton
-        position={[-0.12, -0.25, 0.016]}
-        width={0.22}
-        label={showSelfBody ? 'MY BODY: ON' : 'MY BODY: OFF'}
+        position={[-0.09, -0.135, 0.012]}
+        icon="body"
+        label={showSelfBody ? 'BODY ON' : 'BODY OFF'}
         color={showSelfBody ? '#0ea5e9' : '#475569'}
         onClick={() => useMyRoomStore.getState().setShowSelfBody(!showSelfBody)}
       />
       <ARStudioButton
-        position={[0.12, -0.25, 0.016]}
-        width={0.22}
-        label={micEnabled ? 'MIC: ON' : 'MIC: MUTED'}
+        position={[0.09, -0.135, 0.012]}
+        icon="mic"
+        label={micEnabled ? 'MIC ON' : 'MUTED'}
         color={micEnabled ? '#059669' : '#dc2626'}
         onClick={() => {
           voiceAudio.setMicEnabled(!micEnabled)
@@ -604,44 +602,9 @@ function InARCraftStudioPanel() {
         }}
       />
       <ARStudioButton
-        position={[0.36, -0.25, 0.016]}
-        width={0.22}
-        label="WIPE EVERYTHING"
-        color="#9f1239"
-        onClick={() => {
-          clearAllCreatedRoomContent()
-          useMyRoomStore.getState().setStatusHint('Removed all created craft objects and room decor!')
-        }}
-      />
-
-      {/* Row 7: AI Dressup Style (Chic / Nerdy / Sporty), Main Lobby & Exit AR */}
-      <ARStudioButton
-        position={[-0.31, -0.37, 0.016]}
-        width={0.28}
-        label={
-          aiDressupStyle === 'sport'
-            ? 'DRESS: SPORTY'
-            : aiDressupStyle === 'nerdy'
-              ? 'DRESS: NERDY'
-              : 'DRESS: CHIC'
-        }
-        color={
-          aiDressupStyle === 'sport'
-            ? '#0284c7'
-            : aiDressupStyle === 'nerdy'
-              ? '#4338ca'
-              : '#7d293b'
-        }
-        onClick={() => {
-          const next =
-            aiDressupStyle === 'chic' ? 'nerdy' : aiDressupStyle === 'nerdy' ? 'sport' : 'chic'
-          useMyRoomStore.getState().setAiDressupStyle(next)
-        }}
-      />
-      <ARStudioButton
-        position={[0, -0.37, 0.016]}
-        width={0.28}
-        label="MAIN LOBBY"
+        position={[0.27, -0.135, 0.012]}
+        icon="lobby"
+        label="LOBBY"
         color="#7c3aed"
         onClick={() => {
           void xrStore.getState().session?.end()
@@ -649,44 +612,48 @@ function InARCraftStudioPanel() {
           useGameStore.getState().leaveRoomReset()
         }}
       />
-      <ARStudioButton
-        position={[0.31, -0.37, 0.016]}
-        width={0.28}
-        label="EXIT AR"
-        color="#b91c1c"
-        onClick={() => {
-          void xrStore.getState().session?.end()
-        }}
-      />
 
-      {/* Row 8: Opponent Avatar 360° Rotation & Inspection Controls (for VR/AR & Desktop) */}
+      {/* Row 7: Opponent 360 Rotation Controls + Exit AR */}
       <ARStudioButton
-        position={[-0.36, -0.49, 0.016]}
-        width={0.22}
-        label="ROTATE -45°"
+        position={[-0.27, -0.205, 0.012]}
+        icon="rotL"
+        label="-45°"
         color="#0369a1"
         onClick={() => useMyRoomStore.getState().rotateAiModelBy(-Math.PI * 0.25)}
       />
       <ARStudioButton
-        position={[-0.12, -0.49, 0.016]}
-        width={0.22}
-        label="ROTATE +45°"
+        position={[-0.09, -0.205, 0.012]}
+        icon="rotR"
+        label="+45°"
         color="#0369a1"
         onClick={() => useMyRoomStore.getState().rotateAiModelBy(Math.PI * 0.25)}
       />
       <ARStudioButton
-        position={[0.12, -0.49, 0.016]}
-        width={0.22}
-        label={aiAutoRotate ? 'SPIN: ON' : 'SPIN: OFF'}
+        position={[0.09, -0.205, 0.012]}
+        icon="spin"
+        label={aiAutoRotate ? 'SPIN ON' : 'SPIN OFF'}
         color={aiAutoRotate ? '#0ea5e9' : '#475569'}
         onClick={() => useMyRoomStore.getState().setAiAutoRotate(!aiAutoRotate)}
       />
       <ARStudioButton
-        position={[0.36, -0.49, 0.016]}
-        width={0.22}
+        position={[0.27, -0.205, 0.012]}
+        icon="reset"
         label="RESET 0°"
         color="#334155"
         onClick={() => useMyRoomStore.getState().resetAiModelRotation()}
+      />
+
+      {/* Bottom slim Exit AR Bar */}
+      <ARStudioButton
+        position={[0, -0.28, 0.012]}
+        width={0.34}
+        height={0.052}
+        icon="exit"
+        label="EXIT WEBXR AR"
+        color="#b91c1c"
+        onClick={() => {
+          void xrStore.getState().session?.end()
+        }}
       />
     </group>
   )

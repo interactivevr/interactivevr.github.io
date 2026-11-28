@@ -246,6 +246,9 @@ export interface DartThrowRecord {
   localX: number
   localY: number
   stuck: boolean
+  pulled?: boolean
+  worldPos?: [number, number, number]
+  worldQuat?: [number, number, number, number]
 }
 
 export interface DartStateNetPayload {

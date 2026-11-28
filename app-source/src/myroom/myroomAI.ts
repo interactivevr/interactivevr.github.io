@@ -255,25 +255,29 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   const userInteractingWithBody =
     ai.heldHandByUser !== null || ai.hairPullTarget !== null || ai.touchedShoulderSide !== null
 
-  // 3. Stationary 360-degree inspectable stance when idle:
-  // Companion does NOT spin or chase user look direction, letting user freely walk around front/back/left/right/top/bottom!
-  // Moves ONLY when actively pulled (pullToUserActive) or collecting a gifted object!
+  // 3. Companion locomotion:
+  // - If user is actively holding & pulling AI companion (hand, body, or hair), follow smoothly where pulled!
+  // - Else stationary 360-degree inspectable stance unless pulled near user or collecting a gift.
   let goalX = ai.pos[0]
   let goalZ = ai.pos[2]
-  if (ai.pullToUserActive) {
+  const activePullFollow = ai.followPullTargetXZ !== null
+  if (activePullFollow && ai.followPullTargetXZ) {
+    goalX = ai.followPullTargetXZ[0]
+    goalZ = ai.followPullTargetXZ[1]
+  } else if (ai.pullToUserActive) {
     goalX = userHead[0] + _userFwd.x * 0.92
     goalZ = userHead[2] + _userFwd.z * 0.92
   }
 
   const giftObj = ai.targetObjId ? myRoomRuntime.objects.get(ai.targetObjId) : null
-  if (!ai.pullToUserActive && giftObj && ai.actionMode === 'collect') {
+  if (!activePullFollow && !ai.pullToUserActive && giftObj && ai.actionMode === 'collect') {
     ai.lookTarget = [...giftObj.pos]
     const dirX = ai.pos[0] - giftObj.pos[0]
     const dirZ = ai.pos[2] - giftObj.pos[2]
     const dLen = Math.hypot(dirX, dirZ) || 1
     goalX = giftObj.pos[0] + (dirX / dLen) * 0.48
     goalZ = giftObj.pos[2] + (dirZ / dLen) * 0.48
-  } else if (ai.pullToUserActive) {
+  } else if (ai.pullToUserActive || activePullFollow) {
     ai.lookTarget = [...userHead]
   } else {
     ai.lookTarget = null
@@ -286,7 +290,23 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   const dz = goalZ - ai.pos[2]
   const distToGoal = Math.hypot(dx, dz)
 
-  if (ai.pullToUserActive) {
+  if (activePullFollow) {
+    if (distToGoal > 0.025) {
+      const followStep = Math.min(distToGoal, 2.9 * cDt)
+      let nextX = ai.pos[0] + (dx / distToGoal) * followStep
+      let nextZ = ai.pos[2] + (dz / distToGoal) * followStep
+      ;[nextX, nextZ] = steerClearOfFurniture(nextX, nextZ, surfaces, floorY)
+      ;[nextX, nextZ] = clampInsideRoomWalls(nextX, nextZ, 0.44, surfaces, bounds)
+      ai.pos[0] = nextX
+      ai.pos[2] = nextZ
+      ai.isWalking = true
+      ai.walkPhase += cDt * 8.2
+    } else {
+      ai.isWalking = false
+    }
+    ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 4.5)
+    ai.baseFrontYaw = ai.yaw
+  } else if (ai.pullToUserActive) {
     const distToUser = Math.hypot(userHead[0] - ai.pos[0], userHead[2] - ai.pos[2])
     if (distToUser <= 1.08 || distToGoal < 0.22) {
       ai.pullToUserActive = false
