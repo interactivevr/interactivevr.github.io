@@ -5,6 +5,9 @@ export default defineConfig({
   base: './',
   cacheDir: '.vite-cache',
   plugins: [react()],
+  resolve: {
+    dedupe: ['three'],
+  },
   server: {
     host: true,
     port: 5173,

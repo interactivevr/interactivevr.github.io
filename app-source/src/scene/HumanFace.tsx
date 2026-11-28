@@ -224,7 +224,7 @@ export function HumanFaceHead({
         <group
           key={i}
           position={[ex, 0.012, -0.092]}
-          rotation={[0, i === 0 ? 0.12 : -0.12, 0]}
+          rotation={[0, i === 0 ? 0.08 : -0.08, 0]}
         >
           {/* Bright Clean Sclera */}
           <mesh scale={isFemale ? [1.1, 0.88, 0.9] : [1.05, 0.92, 0.92]}>
@@ -239,8 +239,8 @@ export function HumanFaceHead({
             />
           </mesh>
           {/* Rich Vivid Iris */}
-          <mesh position={[0, 0, -0.0074]} scale={[1, 1, 0.55]}>
-            <sphereGeometry args={[isFemale ? 0.0085 : 0.0074, 16, 12]} />
+          <mesh position={[0, 0, -0.0076]} scale={[1, 1, 0.55]}>
+            <sphereGeometry args={[isFemale ? 0.0094 : 0.0078, 16, 12]} />
             <meshPhysicalMaterial
               map={irisTex}
               emissive={profile.eyeColor}
@@ -251,18 +251,18 @@ export function HumanFaceHead({
             />
           </mesh>
           {/* Crisp Pupil */}
-          <mesh position={[0, 0, -0.0108]} scale={[1, 1, 0.45]}>
-            <sphereGeometry args={[0.0041, 10, 8]} />
+          <mesh position={[0, 0, -0.0112]} scale={[1, 1, 0.45]}>
+            <sphereGeometry args={[0.0042, 10, 8]} />
             <meshBasicMaterial color="#090707" />
           </mesh>
           {/* Specular Corneal Highlight */}
-          <mesh position={[-0.0026, 0.0025, -0.0124]}>
-            <sphereGeometry args={[0.0016, 6, 6]} />
+          <mesh position={[-0.0026, 0.0025, -0.0126]}>
+            <sphereGeometry args={[0.0017, 6, 6]} />
             <meshBasicMaterial color="#ffffff" />
           </mesh>
-          {/* Curved Thin Eyelash Arch right ABOVE eye opening (keeps iris open & bright!) */}
-          <mesh position={[0, 0.0078, -0.007]} rotation={[0.18, 0, i === 0 ? 0.28 : Math.PI - 0.28]}>
-            <torusGeometry args={[0.0125, isFemale ? 0.0015 : 0.0011, 6, 14, Math.PI * 0.78]} />
+          {/* Symmetrical Curved Upper Eyelash Arch above iris opening */}
+          <mesh position={[0, 0.0068, -0.0072]} rotation={[0.16, 0, 0.11 * Math.PI + (i === 0 ? -0.05 : 0.05)]}>
+            <torusGeometry args={[0.0124, isFemale ? 0.0014 : 0.0011, 6, 14, Math.PI * 0.78]} />
             <meshBasicMaterial color="#181214" />
           </mesh>
           {/* Blinking eyelid only visible during brief blink frames */}

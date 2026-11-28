@@ -60,12 +60,6 @@ export function SteelTipDartMesh({
           roughness={0.35}
         />
       </mesh>
-      {glowReady && (
-        <mesh>
-          <sphereGeometry args={[0.046, 12, 10]} />
-          <meshBasicMaterial color={color} transparent opacity={0.18} wireframe />
-        </mesh>
-      )}
     </group>
   )
 }

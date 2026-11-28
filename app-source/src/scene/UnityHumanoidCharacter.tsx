@@ -657,13 +657,13 @@ export function UnityHumanoidCharacter({
         {(isCasual || isNerdy) && !firstPersonMode && (
           <group position={[0, chestLocalCollarY, 0]}>
             {isFemale && isCasual ? (
-              <group position={[0, -0.025, -0.004]}>
+              <group position={[0, -0.024, -0.004]}>
                 {/* Dainty brushed gold choker chain + oval pendant necklace over mock-neck knit */}
-                <mesh position={[0, 0.018, 0.002]} rotation={[Math.PI * 0.5 + 0.18, 0, 0]}>
-                  <torusGeometry args={[0.054, 0.0022, 8, 28]} />
+                <mesh position={[0, 0.016, 0.002]} rotation={[Math.PI * 0.5 + 0.16, 0, 0]}>
+                  <torusGeometry args={[0.062, 0.0024, 8, 28]} />
                   <meshStandardMaterial color={resolvedAccent} metalness={0.88} roughness={0.22} />
                 </mesh>
-                <mesh position={[0, -0.022, -0.068]} scale={[0.85, 1.35, 0.45]}>
+                <mesh position={[0, -0.022, -0.075]} scale={[0.85, 1.35, 0.45]}>
                   <sphereGeometry args={[0.0085, 12, 10]} />
                   <meshStandardMaterial color={resolvedAccent} metalness={0.9} roughness={0.2} />
                 </mesh>

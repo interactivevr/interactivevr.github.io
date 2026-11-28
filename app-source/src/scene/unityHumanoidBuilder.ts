@@ -651,10 +651,10 @@ export function buildUnityBodyGeometry(
         center: [0, 0.79, 0.005],
         rx: 0.194,
         rz: 0.148,
-        frontScale: 0.96,
+        frontScale: 1.04,
         backScale: 1.12,
         weights: [[B.Hips, 1]],
-        perVertexWeights: skirtWeightAt(0.28),
+        perVertexWeights: skirtWeightAt(0.32),
         matSlot: 2,
         shapeFn: pleatShape(0.013),
       },
@@ -663,10 +663,10 @@ export function buildUnityBodyGeometry(
         center: [0, 0.695, 0.004],
         rx: 0.218,
         rz: 0.168,
-        frontScale: 0.96,
+        frontScale: 1.06,
         backScale: 1.08,
         weights: [[B.Hips, 1]],
-        perVertexWeights: skirtWeightAt(0.42),
+        perVertexWeights: skirtWeightAt(0.48),
         matSlot: 2,
         shapeFn: pleatShape(0.015),
       },
@@ -675,10 +675,10 @@ export function buildUnityBodyGeometry(
         center: [0, 0.696, 0.004],
         rx: 0.196,
         rz: 0.15,
-        frontScale: 0.96,
+        frontScale: 1.04,
         backScale: 1.08,
         weights: [[B.Hips, 1]],
-        perVertexWeights: skirtWeightAt(0.42),
+        perVertexWeights: skirtWeightAt(0.48),
         matSlot: 2,
         shapeFn: pleatShape(0.011),
       },
@@ -714,33 +714,40 @@ export function buildUnityBodyGeometry(
 
     const armRings: LoftRing[] = isChicF
       ? [
-          // Fitted tailored knit sleeve seamlessly blending into mock-neck sweater shoulder yoke
+          // Fitted tailored knit sleeve seamlessly sloping down from mock-neck shoulder yoke
           {
-            center: [sx - sideSign * 0.044, sy - 0.004, 0],
-            rx: 0.042 * armScale,
-            rz: 0.042 * armScale,
+            center: [sx - sideSign * 0.048, sy - 0.008, 0],
+            rx: 0.036 * armScale,
+            rz: 0.036 * armScale,
             weights: [[B.Chest, 0.78], [shBone, 0.22]],
             matSlot: sleeveSlot,
           },
           {
-            center: [sx, sy + 0.004, 0],
-            rx: 0.048 * armScale,
-            rz: 0.047 * armScale,
+            center: [sx - sideSign * 0.012, sy - 0.015, 0],
+            rx: 0.041 * armScale,
+            rz: 0.04 * armScale,
             weights: [[shBone, 0.38], [uaBone, 0.62]],
             matSlot: sleeveSlot,
           },
           {
-            center: [sx, sy - 0.09, 0],
-            rx: 0.041 * armScale,
-            rz: 0.041 * armScale,
+            center: [sx, sy - 0.045, 0],
+            rx: 0.04 * armScale,
+            rz: 0.04 * armScale,
+            weights: [[uaBone, 0.92], [shBone, 0.08]],
+            matSlot: sleeveSlot,
+          },
+          {
+            center: [sx, sy - 0.1, 0],
+            rx: 0.039 * armScale,
+            rz: 0.039 * armScale,
             weights: [[uaBone, 1]],
             matSlot: sleeveSlot,
           },
           // Ribbed knit three-quarter sleeve cuff
           {
             center: [sx, sy - 0.165, -0.001],
-            rx: 0.044 * armScale,
-            rz: 0.043 * armScale,
+            rx: 0.043 * armScale,
+            rz: 0.042 * armScale,
             weights: [[uaBone, 0.88], [laBone, 0.12]],
             matSlot: sleeveSlot,
           },
@@ -768,27 +775,27 @@ export function buildUnityBodyGeometry(
           },
         ]
       : [
-          // Shoulder socket tucked cleanly into vest armhole
+          // Shoulder socket sloping smoothly from torso collarbone yoke into sleeve
           {
-            center: [sx - sideSign * 0.042, sy - 0.008, 0],
-            rx: 0.046 * armScale,
-            rz: 0.046 * armScale,
+            center: [sx - sideSign * 0.046, sy - 0.009, 0],
+            rx: 0.04 * armScale,
+            rz: 0.04 * armScale,
             weights: [[B.Chest, 0.78], [shBone, 0.22]],
             matSlot: sleeveSlot,
           },
-          // Crisp short sleeve shoulder cap
+          // Tailored short sleeve shoulder cap sloping downward
           {
-            center: [sx, sy + 0.004, 0],
-            rx: 0.056 * armScale,
-            rz: 0.055 * armScale,
+            center: [sx - sideSign * 0.01, sy - 0.016, 0],
+            rx: 0.046 * armScale,
+            rz: 0.046 * armScale,
             weights: [[shBone, 0.35], [uaBone, 0.65]],
             matSlot: sleeveSlot,
           },
-          // Short-sleeve slight outward bell puff
+          // Short-sleeve soft outward drape
           {
             center: [sx, sy - 0.068, 0],
-            rx: 0.058 * armScale,
-            rz: 0.056 * armScale,
+            rx: 0.052 * armScale,
+            rz: 0.05 * armScale,
             weights: [[uaBone, 1]],
             matSlot: sleeveSlot,
           },
@@ -1128,7 +1135,8 @@ export function buildSculptedLongHairGeometry(): THREE.BufferGeometry {
   const addRibbon = (
     uSegs: number,
     vSegs: number,
-    evalPt: (u: number, v: number) => [number, number, number]
+    evalPt: (u: number, v: number) => [number, number, number],
+    evalUV: (u: number, v: number) => [number, number] = (u, v) => [u, 1 - v]
   ) => {
     const base = positions.length / 3
     const rowLen = uSegs + 1
@@ -1137,8 +1145,9 @@ export function buildSculptedLongHairGeometry(): THREE.BufferGeometry {
       for (let c = 0; c <= uSegs; c++) {
         const u = c / uSegs
         const [x, y, z] = evalPt(u, v)
+        const [uvU, uvV] = evalUV(u, v)
         positions.push(x, y, z)
-        uvs.push(u, v)
+        uvs.push(uvU, uvV)
       }
     }
     for (let r = 0; r < vSegs; r++) {
@@ -1152,61 +1161,71 @@ export function buildSculptedLongHairGeometry(): THREE.BufferGeometry {
     }
   }
 
-  // 1. Cranial parted dome hugging skull cleanly from center part apex outward to back/temples
+  // 1. Cranial parted dome hugging skull cleanly down to equator seam
   // Leave clean center inverted-V forehead parting open over front (-Z)!
-  addRibbon(28, 16, (u, v) => {
-    const theta = u * Math.PI * 2 // 0 = +Z back, PI = -Z front
-    const frontProximity = Math.max(0, -Math.cos(theta)) // 1 at forehead center, 0 at ears/back
-    // Raise front hairline neatly into center-part arch over forehead
-    const maxPhi = Math.PI * (0.64 - Math.pow(frontProximity, 1.35) * 0.36)
-    const phi = 0.06 + v * maxPhi // polar angle from crown top
-    const sinP = Math.sin(phi)
-    const cosP = Math.cos(phi)
-    // Gentle center-part furrow along top crown (-Z to +Z top seam)
-    const partDip = Math.exp(-Math.pow(Math.sin(theta) / 0.18, 2)) * (1 - v) * 0.008
-    const r = 0.119 - partDip
-    return [Math.sin(theta) * sinP * r * 0.95, cosP * r * 1.03 + 0.006, Math.cos(theta) * sinP * r * 0.99]
-  })
+  addRibbon(
+    28,
+    16,
+    (u, v) => {
+      const theta = u * Math.PI * 2 // 0 = +Z back, PI = -Z front
+      const frontProximity = Math.max(0, -Math.cos(theta)) // 1 at forehead center, 0 at ears/back
+      const maxPhi = Math.PI * (0.5 - Math.pow(frontProximity, 1.35) * 0.22)
+      const phi = 0.04 + v * (maxPhi - 0.04) // polar angle from crown top to y=0.006 back equator
+      const sinP = Math.sin(phi)
+      const cosP = Math.cos(phi)
+      const partDip = Math.exp(-Math.pow(Math.sin(theta) / 0.18, 2)) * (1 - v) * 0.008
+      const r = 0.119 - partDip
+      return [Math.sin(theta) * sinP * r * 0.95, cosP * r * 1.03 + 0.006, Math.cos(theta) * sinP * r * 0.99]
+    },
+    (u, v) => [u, 1 - v * 0.45]
+  )
 
-  // 2. Full flowing back hair curtain behind ears down onto upper back/shoulders
-  addRibbon(20, 14, (u, v) => {
-    // u across back arc (-PI*0.64 to +PI*0.64 around +Z back)
-    const theta = (u - 0.5) * Math.PI * 1.32
-    const y = 0.04 - v * 0.29 // +0.04 down to -0.25 behind neck/shoulders
-    const radiusW = 0.112 + Math.sin(v * Math.PI) * 0.022 - v * 0.014
-    const depthZ = 0.106 + Math.sin(v * Math.PI * 0.75) * 0.024
-    return [Math.sin(theta) * radiusW, y, Math.cos(theta) * depthZ + 0.01]
-  })
+  // 2. Seamless Continuous Back Hair Curtain extending flush from crown equator (+0.006) onto upper back
+  addRibbon(
+    22,
+    16,
+    (u, v) => {
+      const theta = (u - 0.5) * Math.PI * 1.12
+      const dropLen = 0.235 + 0.035 * Math.cos(theta)
+      const y = 0.006 - v * dropLen
+      const radiusW = 0.113 + Math.sin(v * Math.PI) * 0.012 - Math.pow(v, 2) * 0.006
+      const depthZ = 0.1178 + Math.sin(v * Math.PI * 0.85) * 0.015
+      const backFlare = Math.sin(v * Math.PI) * 0.01
+      return [Math.sin(theta) * radiusW, y, Math.cos(theta) * depthZ + backFlare]
+    },
+    (u, v) => [u, 0.55 * (1 - v)]
+  )
 
-  // 3. Left & Right Center-Parted Front Curtain Layers draping gracefully past jawline onto chest
+  // 3. Left & Right Center-Parted Front Curtain Layers draping smoothly past temples onto collarbone
   for (const side of [-1, 1] as const) {
-    for (let layer = 0; layer < 3; layer++) {
-      const layerSpreadZ = layer * 0.018
-      const layerOutX = layer * 0.007
-      const endDropY = -0.24 - layer * 0.02
+    for (let layer = 0; layer < 2; layer++) {
+      const layerSpreadZ = layer * 0.016
+      const layerOutX = layer * 0.008
+      const endDropY = -0.23 - layer * 0.02
       addRibbon(6, 16, (u, v) => {
-        // v = 0 starts flush at top crown center part (±0.004, +0.123, -0.025)
         const s = v
         const mid = Math.sin(s * Math.PI)
         const centerX =
           side *
-          (0.005 +
-            Math.pow(s, 0.68) * (0.094 + layerOutX) -
-            Math.pow(Math.max(0, s - 0.55) / 0.45, 1.5) * 0.018)
-        const centerY = 0.124 - Math.pow(s, 1.15) * (0.124 - endDropY)
+          (0.006 +
+            Math.pow(s, 0.72) * (0.1 + layerOutX) -
+            Math.pow(Math.max(0, s - 0.6) / 0.4, 1.5) * 0.014)
+        const centerY = 0.123 - Math.pow(s, 1.12) * (0.123 - endDropY)
         const centerZ =
-          -0.028 -
-          mid * (0.072 - layerSpreadZ) +
-          Math.pow(Math.max(0, s - 0.4) / 0.6, 1.4) * 0.028 +
-          layerSpreadZ * 0.5
+          -0.025 -
+          mid * (0.056 - layerSpreadZ) +
+          Math.pow(Math.max(0, s - 0.45) / 0.55, 1.4) * 0.024 +
+          layerSpreadZ * 0.4
 
-        // Ribbon width tapers gently toward wispy tips at shoulder/collarbone
-        const width = 0.036 * (0.45 + 0.75 * Math.sin(Math.min(1, s * 1.1) * Math.PI * 0.7)) * (1 - Math.pow(s, 2.4) * 0.65)
+        const width =
+          0.032 *
+          (0.45 + 0.65 * Math.sin(Math.min(1, s * 1.1) * Math.PI * 0.7)) *
+          (1 - Math.pow(s, 2.4) * 0.65)
         const across = (u - 0.5) * 2
-        const nx = across * width * 0.55
-        const nz = across * width * 0.84 * -side * 0.35
-        const curlCurve = Math.sin(u * Math.PI) * 0.007
-        return [centerX + nx + side * curlCurve, centerY, centerZ + nz - curlCurve * 0.5]
+        const nx = across * width * 0.35
+        const nz = across * width * 0.88
+        const curlCurve = Math.sin(u * Math.PI) * 0.006
+        return [centerX + nx + side * curlCurve, centerY, centerZ + nz - curlCurve * 0.4]
       })
     }
   }
@@ -1295,10 +1314,10 @@ export function createUnityBodyTextures(opts: {
       ctx.fillStyle = 'rgba(120, 102, 86, 0.04)'
       ctx.fillRect(0, y, 512, 1)
     }
-    // Delicate ribbed knit bottom hem band
+    // Delicate ribbed knit bottom hem band aligned to torso waistband ring (r=5 -> v~0.357 -> canvasY~329)
     for (let x = 0; x < 512; x += 6) {
-      ctx.fillStyle = x % 12 === 0 ? 'rgba(255,255,255,0.18)' : 'rgba(130, 112, 98, 0.18)'
-      ctx.fillRect(x, 385, 2.5, 45)
+      ctx.fillStyle = x % 12 === 0 ? 'rgba(255,255,255,0.2)' : 'rgba(130, 112, 98, 0.2)'
+      ctx.fillRect(x, 296, 2.5, 44)
     }
   } else if (opts.uniformStyle === 'nerdy' || opts.uniformStyle === 'casual') {
     for (let x = 0; x < 512; x += 4) {

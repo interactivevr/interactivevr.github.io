@@ -62,8 +62,6 @@ const _dartZeroFwd = new THREE.Vector3(0, 0, -1)
 
 export function MyRoomARRig() {
   const originRef = useRef<THREE.Group>(null)
-  const leftAuraRef = useRef<THREE.Mesh>(null)
-  const rightAuraRef = useRef<THREE.Mesh>(null)
 
   const camera = useThree((s) => s.camera)
   const gl = useThree((s) => s.gl)
@@ -73,9 +71,9 @@ export function MyRoomARRig() {
   const showSelfBody = useMyRoomStore((s) => s.showSelfBody)
 
   const desktopKeysRef = useRef<Set<string>>(new Set())
-  const desktopPosRef = useRef(new THREE.Vector3(0, 1.5, 1.35))
+  const desktopPosRef = useRef(new THREE.Vector3(0, 1.02, 2.28))
   const desktopYawRef = useRef(0)
-  const desktopPitchRef = useRef(-0.1)
+  const desktopPitchRef = useRef(-0.025)
   const desktopDragRef = useRef<null | 'look' | 'model'>(null)
   const desktopEulerRef = useRef(new THREE.Euler(0, 0, 0, 'YXZ'))
   const desktopFwdRef = useRef(new THREE.Vector3())
@@ -137,12 +135,19 @@ export function MyRoomARRig() {
   // Desktop 3D Preview walk-around & 360° camera look when not inside WebXR headset
   useEffect(() => {
     if (inXR) return
-    desktopPosRef.current.set(0, 1.5, 1.35)
+    desktopPosRef.current.set(0, 1.02, 2.28)
     desktopYawRef.current = 0
-    desktopPitchRef.current = -0.1
-    desktopEulerRef.current.set(-0.1, 0, 0, 'YXZ')
+    desktopPitchRef.current = -0.025
+    desktopEulerRef.current.set(-0.025, 0, 0, 'YXZ')
     camera.position.copy(desktopPosRef.current)
     camera.quaternion.setFromEuler(desktopEulerRef.current)
+    runtimeState.localPose.headPos = [0, 1.02, 2.28]
+    runtimeState.localPose.headQuat = [
+      camera.quaternion.x,
+      camera.quaternion.y,
+      camera.quaternion.z,
+      camera.quaternion.w,
+    ]
 
     const canvas = gl.domElement
     const onKeyDown = (e: KeyboardEvent) => {
@@ -278,8 +283,8 @@ export function MyRoomARRig() {
       camera.position.copy(desktopPosRef.current)
       camera.quaternion.setFromEuler(desktopEulerRef.current)
 
-      // Keep virtual local hands cleanly tucked near user waist on desktop so AI proximity checks stay realistic
-      const handY = Math.max(myRoomRuntime.floorY + 0.35, desktopPosRef.current.y - 0.42)
+      // Keep virtual local hands cleanly tucked below portrait center on desktop so HUD stays unobstructed
+      const handY = Math.max(myRoomRuntime.floorY + 0.35, desktopPosRef.current.y - 0.56)
       lp.leftPos = [
         desktopPosRef.current.x - right.x * 0.22 + fwd.x * 0.28,
         handY,
@@ -1370,16 +1375,6 @@ export function MyRoomARRig() {
         }
       }
     }
-
-    // Visual hand aura indicators
-    if (leftAuraRef.current) {
-      leftAuraRef.current.position.set(leftRes.posArr[0], leftRes.posArr[1], leftRes.posArr[2])
-      leftAuraRef.current.visible = Boolean(leftController?.object || leftHand?.inputSource.hand)
-    }
-    if (rightAuraRef.current) {
-      rightAuraRef.current.position.set(rightRes.posArr[0], rightRes.posArr[1], rightRes.posArr[2])
-      rightAuraRef.current.visible = Boolean(rightController?.object || rightHand?.inputSource.hand)
-    }
   })
 
   return (
@@ -1403,15 +1398,6 @@ export function MyRoomARRig() {
           hideRightHand={Boolean(!rightController?.object && rightHand)}
         />
       )}
-
-      <mesh ref={leftAuraRef} visible={false}>
-        <ringGeometry args={[0.045, 0.058, 16]} />
-        <meshBasicMaterial color="#38bdf8" side={THREE.DoubleSide} transparent opacity={0.45} />
-      </mesh>
-      <mesh ref={rightAuraRef} visible={false}>
-        <ringGeometry args={[0.045, 0.058, 16]} />
-        <meshBasicMaterial color="#fb923c" side={THREE.DoubleSide} transparent opacity={0.45} />
-      </mesh>
     </>
   )
 }

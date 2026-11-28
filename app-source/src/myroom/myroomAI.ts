@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { runtimeState } from '../store/useGameStore'
+import { runtimeState, useGameStore } from '../store/useGameStore'
 import { encodeDeformOffsets, foldCraftWithHands, squeezeCraftWithPalm } from './craftEngine'
 import { computeAIDartThrowVelocity } from './dartEngine'
 import { clampInsideRoomWalls, findSupportingSurfaceY } from './roomPhysics'
@@ -203,23 +203,26 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
   if (_userFwd.lengthSq() < 1e-4) _userFwd.set(0, 0, -1)
   _userFwd.normalize()
 
-  // Initial spawn right nearest to user (1.0m in front, clear of obstacles & inside walls!)
+  // Initial spawn facing user (0.98m in XR / scanned furniture rooms, 1.82m full-body portrait in empty Desktop studio)
+  const inXR = useGameStore.getState().inXR
   const faceUserYaw = Math.atan2(-(userHead[0] - ai.pos[0]), -(userHead[2] - ai.pos[2]))
   if (!ai.initializedNearUser) {
-    let initX = userHead[0] + _userFwd.x * 0.98
-    let initZ = userHead[2] + _userFwd.z * 0.98
+    const spawnDist = inXR || surfaces.length > 0 ? 0.98 : 1.82
+    let initX = userHead[0] + _userFwd.x * spawnDist
+    let initZ = userHead[2] + _userFwd.z * spawnDist
     ;[initX, initZ] = steerClearOfFurniture(initX, initZ, surfaces, floorY)
     ;[initX, initZ] = clampInsideRoomWalls(initX, initZ, 0.44, surfaces, bounds)
     ai.pos[0] = initX
     ai.pos[1] = floorY
     ai.pos[2] = initZ
-    ai.yaw = Math.atan2(-(userHead[0] - initX), -(userHead[2] - initZ))
+    ai.baseFrontYaw = Math.atan2(-(userHead[0] - initX), -(userHead[2] - initZ))
+    ai.yaw = ai.baseFrontYaw
     ai.initializedNearUser = true
   }
 
-  // 1. Match user's posture: take SITTING position if user is seated (<1.32m above floor), else STANDING
+  // 1. Match user's physical VR posture (SITTING vs STANDING) in XR; stay poised standing in Desktop 3D Preview
   const userEyeRelY = userHead[1] - floorY
-  const targetSit = userEyeRelY < 1.32 ? 1 : 0
+  const targetSit = inXR && userEyeRelY < 1.32 ? 1 : 0
   ai.sitBlend += (targetSit - ai.sitBlend) * Math.min(1, cDt * 3.8)
   ai.pos[1] = floorY
 
@@ -299,7 +302,8 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
       ai.isWalking = true
       ai.walkPhase += cDt * 8.5
     }
-    ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 8.0)
+      ai.yaw += normalizeAngleDelta(faceUserYaw, ai.yaw) * Math.min(1, cDt * 8.0)
+      ai.baseFrontYaw = faceUserYaw
   } else if (ai.actionMode === 'collect' && giftObj && distToGoal > 0.24 && !userInteractingWithBody && ai.sitBlend <= 0.65) {
     const moveStep = Math.min(distToGoal, AI_MOVE_SPEED * cDt)
     let nextX = ai.pos[0] + (dx / distToGoal) * moveStep
@@ -319,7 +323,8 @@ export function stepMyRoomAI(dt: number, localPeerId: string, hasHumanPeers: boo
       ai.yaw += cDt * 0.95
     }
   }
-  const curDeg = ((Math.round((ai.yaw * 180) / Math.PI) % 360) + 360) % 360
+  const relDeg = Math.round(((ai.yaw - ai.baseFrontYaw) * 180) / Math.PI)
+  const curDeg = ((relDeg % 360) + 360) % 360
   if (Math.abs(curDeg - st.aiYawDeg) >= (st.aiAutoRotate ? 2 : 1)) {
     useMyRoomStore.setState({ aiYawDeg: curDeg })
   }

@@ -47,6 +47,8 @@ export interface RuntimeCraftObject extends CraftObjectNetState {
 export interface MyRoomAIRuntime {
   pos: [number, number, number]
   yaw: number
+  /** World yaw where the companion faces directly toward the user (0° = Front) */
+  baseFrontYaw: number
   initializedNearUser: boolean
   pullToUserActive: boolean
   sitBlend: number // 0 = standing, 1 = seated posture matching user
@@ -98,7 +100,8 @@ export const myRoomRuntime = {
   },
   ai: {
     pos: [0, 0, -0.95] as [number, number, number],
-    yaw: 0,
+    yaw: Math.PI,
+    baseFrontYaw: Math.PI,
     initializedNearUser: false,
     pullToUserActive: false,
     sitBlend: 0,
@@ -619,16 +622,17 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
     }),
   rotateAiModelBy: (deltaYaw) => {
     myRoomRuntime.ai.yaw += deltaYaw
-    const aiYawDeg = ((Math.round((myRoomRuntime.ai.yaw * 180) / Math.PI) % 360) + 360) % 360
+    const relDeg = Math.round(((myRoomRuntime.ai.yaw - myRoomRuntime.ai.baseFrontYaw) * 180) / Math.PI)
+    const aiYawDeg = ((relDeg % 360) + 360) % 360
     set({ aiAutoRotate: false, aiYawDeg })
   },
   setAiYawDeg: (deg) => {
     const normDeg = ((Math.round(deg) % 360) + 360) % 360
-    myRoomRuntime.ai.yaw = (normDeg * Math.PI) / 180
+    myRoomRuntime.ai.yaw = myRoomRuntime.ai.baseFrontYaw + (normDeg * Math.PI) / 180
     set({ aiAutoRotate: false, aiYawDeg: normDeg })
   },
   resetAiModelRotation: () => {
-    myRoomRuntime.ai.yaw = 0
+    myRoomRuntime.ai.yaw = myRoomRuntime.ai.baseFrontYaw
     set({ aiAutoRotate: false, aiYawDeg: 0, statusHint: 'Reset model facing forward' })
   },
   bumpDecorVersion: () =>
@@ -819,6 +823,8 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
     myRoomRuntime.darts.readyDart = null
     myRoomRuntime.darts.flyingDarts = []
     myRoomRuntime.ai.holdingObjId = null
+    myRoomRuntime.ai.yaw = Math.PI
+    myRoomRuntime.ai.baseFrontYaw = Math.PI
     myRoomRuntime.ai.initializedNearUser = false
     myRoomRuntime.ai.pullToUserActive = false
     myRoomRuntime.ai.collectedIds = []
@@ -838,6 +844,8 @@ export const useMyRoomStore = create<MyRoomStoreState>((set, get) => ({
       selectedCraftId: null,
       selectedDecorId: null,
       showcaseOpen: false,
+      aiAutoRotate: false,
+      aiYawDeg: 0,
       scannedSurfaceCount: 0,
       activeTool: 'none',
       testerReadout: 'READY',

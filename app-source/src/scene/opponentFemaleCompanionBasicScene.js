@@ -346,9 +346,10 @@ export function buildStylizedFemaleCharacter() {
 
   // Balanced medium feminine bust shaping smoothly draped under knit fabric
   for (const side of [-1, 1]) {
-    const bust = new THREE.Mesh(new THREE.SphereGeometry(0.064, 24, 20), knitTopMat)
-    bust.position.set(side * 0.062, 0.225, 0.066)
-    bust.scale.set(0.95, 0.9, 0.88)
+    const bust = new THREE.Mesh(new THREE.SphereGeometry(0.065, 24, 20), knitTopMat)
+    bust.position.set(side * 0.056, 0.228, 0.053)
+    bust.rotation.set(-0.14, side * 0.12, 0)
+    bust.scale.set(1.06, 1.14, 0.56)
     torso.add(bust)
   }
 
@@ -480,15 +481,15 @@ export function buildStylizedFemaleCharacter() {
   hair.position.set(0, 0.095, 0)
   head.add(hair)
 
-  // Center-parted cranial hair crown volume (SphereGeometry left & right domes)
+  // Center-parted cranial hair crown volume (SphereGeometry left & right domes tilted back off forehead)
   for (const side of [-1, 1]) {
     const crownHalf = new THREE.Mesh(
-      new THREE.SphereGeometry(0.111, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.58),
+      new THREE.SphereGeometry(0.111, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.46),
       hairMat
     )
-    crownHalf.position.set(side * 0.012, 0.008, -0.005)
-    crownHalf.rotation.z = -side * 0.12
-    crownHalf.scale.set(0.86, 1.04, 0.98)
+    crownHalf.position.set(side * 0.012, 0.01, -0.008)
+    crownHalf.rotation.set(-0.36, 0, -side * 0.1)
+    crownHalf.scale.set(0.88, 1.02, 0.98)
     hair.add(crownHalf)
   }
 
@@ -503,43 +504,43 @@ export function buildStylizedFemaleCharacter() {
       new THREE.Vector2(0.088, 0.095), // crown taper
     ],
     44,
-    0.26 * Math.PI,
-    1.48 * Math.PI
+    0.3 * Math.PI,
+    1.4 * Math.PI
   )
   const hairCurtainMesh = new THREE.Mesh(hairCurtainGeo, hairMat)
-  hairCurtainMesh.position.set(0, 0, -0.006)
+  hairCurtainMesh.position.set(0, 0, -0.008)
   hairCurtainMesh.scale.set(0.97, 1, 0.99)
   hair.add(hairCurtainMesh)
 
-  // Stylish face-framing curtain bangs & front side strands (CapsuleGeometry)
+  // Stylish face-framing curtain bangs & front side strands (CapsuleGeometry, clear of eyes & brow)
   for (const side of [-1, 1]) {
-    const bang = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.105, 8, 12), hairMat)
-    bang.position.set(side * 0.052, 0.068, 0.072)
-    bang.rotation.set(0.28, side * 0.25, side * 0.42)
-    bang.scale.set(1.1, 1, 0.55)
+    const bang = new THREE.Mesh(new THREE.CapsuleGeometry(0.014, 0.068, 8, 12), hairMat)
+    bang.position.set(side * 0.056, 0.036, 0.072)
+    bang.rotation.set(0.22, side * 0.24, side * 0.54)
+    bang.scale.set(0.95, 1, 0.48)
     hair.add(bang)
 
-    const sideLock = new THREE.Mesh(new THREE.CapsuleGeometry(0.022, 0.2, 8, 12), hairMat)
-    sideLock.position.set(side * 0.096, -0.042, 0.036)
+    const sideLock = new THREE.Mesh(new THREE.CapsuleGeometry(0.021, 0.2, 8, 12), hairMat)
+    sideLock.position.set(side * 0.095, -0.042, 0.034)
     sideLock.rotation.set(0.14, side * 0.12, side * 0.06)
-    sideLock.scale.set(0.9, 1, 0.65)
+    sideLock.scale.set(0.88, 1, 0.65)
     hair.add(sideLock)
   }
 
-  // Chic headband hair accessory (LatheGeometry collar arc)
+  // Chic headband hair accessory (LatheGeometry collar arc flush to crown)
   const headbandGeo = new THREE.LatheGeometry(
     [
-      new THREE.Vector2(0.108, 0),
-      new THREE.Vector2(0.113, 0.012),
-      new THREE.Vector2(0.108, 0.024),
+      new THREE.Vector2(0.103, 0),
+      new THREE.Vector2(0.107, 0.011),
+      new THREE.Vector2(0.103, 0.022),
     ],
     28,
-    0.2 * Math.PI,
-    1.6 * Math.PI
+    0.26 * Math.PI,
+    1.48 * Math.PI
   )
   const headband = new THREE.Mesh(headbandGeo, skirtMat)
-  headband.position.set(0, 0.056, -0.002)
-  headband.rotation.x = -0.35
+  headband.position.set(0, 0.048, -0.004)
+  headband.rotation.x = -0.24
   hair.add(headband)
 
   // ---------------------------------------------------------------------------
@@ -550,19 +551,21 @@ export function buildStylizedFemaleCharacter() {
   const buildArm = (sideName, sideSign) => {
     const shoulder = new THREE.Group()
     shoulder.name = `${sideName}Arm`
-    shoulder.position.set(sideSign * 0.155, 0.315, -0.004)
+    shoulder.position.set(sideSign * 0.142, 0.312, -0.004)
     torso.add(shoulder)
 
-    // Smooth puff-shoulder & fitted upper knit sleeve (LatheGeometry)
-    const sleeveCap = new THREE.Mesh(new THREE.SphereGeometry(0.043, 18, 14), knitTopMat)
+    // Tailored fitted knit shoulder cap & upper sleeve (LatheGeometry)
+    const sleeveCap = new THREE.Mesh(new THREE.SphereGeometry(0.039, 18, 14), knitTopMat)
+    sleeveCap.position.y = -0.004
+    sleeveCap.scale.set(0.92, 1.0, 0.92)
     shoulder.add(sleeveCap)
 
     const sleeveGeo = new THREE.LatheGeometry(
       [
-        new THREE.Vector2(0.035, -0.155),
-        new THREE.Vector2(0.041, -0.14),
-        new THREE.Vector2(0.044, -0.04),
-        new THREE.Vector2(0.038, 0.005),
+        new THREE.Vector2(0.034, -0.152),
+        new THREE.Vector2(0.039, -0.136),
+        new THREE.Vector2(0.041, -0.04),
+        new THREE.Vector2(0.037, 0.004),
       ],
       20
     )

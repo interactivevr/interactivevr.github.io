@@ -238,7 +238,7 @@ export const useGameStore = create<GameStoreState>((set, get) => ({
       inXR,
       xrMode,
       platform: inXR ? 'vr' : get().platform,
-      vrMenuVisible: true,
+      vrMenuVisible: inXR ? true : get().activeGame === 'myroom' ? false : get().vrMenuVisible,
     }),
   setVrMenuVisible: (vrMenuVisible) => set({ vrMenuVisible }),
   toggleVrMenu: () => set((s) => ({ vrMenuVisible: !s.vrMenuVisible })),

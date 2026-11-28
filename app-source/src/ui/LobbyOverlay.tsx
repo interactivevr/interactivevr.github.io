@@ -71,6 +71,9 @@ export function LobbyOverlay() {
       resetCricketBallToBowler()
     } else if (game === 'myroom') {
       useMyRoomStore.getState().resetRoomSession()
+      if (targetPlatform !== 'vr') {
+        useGameStore.getState().setVrMenuVisible(false)
+      }
     } else {
       resetRuntimeBalls(useGameStore.getState().gameMode)
     }
